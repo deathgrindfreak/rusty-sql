@@ -102,7 +102,6 @@ fn symbol_identifier(input: &str) -> Res<&str, Token> {
             r.push_str(v.join("_").as_str());
         }
 
-
         (
             next_input,
             match r.to_lowercase().as_str() {

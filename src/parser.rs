@@ -1,10 +1,11 @@
 use crate::lex::{lex, Token, SymbolType, KeywordType};
 
 use crate::lex::{
-    Token::{Symbol, Identifier, Keyword},
-    SymbolType::{Comma, RightParen, LeftParen, SemiColon},
-    IdentifierType::{Symbol as SymbolIdentifier},
-    KeywordType::{Int, Text, Create, Table},
+    Token::{Symbol, Identifier, Keyword, Number, PGString},
+    SymbolType::{Comma, RightParen, LeftParen, SemiColon, Asterisk},
+    NumberType::{Integer},
+    IdentifierType::{Symbol as SymbolIdentifier, DoubleQuote},
+    KeywordType::{Int, Text, Create, Table, Select, From, As},
 };
 
 use nom::error::VerboseError;
@@ -30,7 +31,7 @@ pub struct ColumnDefinition {
 pub enum Statement {
     SelectStatement {
         item: Vec<Expression>,
-        from: Token,
+        from: Option<Token>,
     },
     CreateStatement {
         name: Token,
@@ -86,12 +87,78 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_statement(&mut self) -> Result<Statement, ParseError<'a>> {
-        if let Ok(s) = self.parse_create_table_statement() {
-            eprintln!("table: {:?}", s);
-            eprintln!("current_token: {:?}", self.tokens.get(self.cursor));
+        if let Ok(s) = self.parse_select_statement() {
+            Ok(s)
+        } else if let Ok(s) = self.parse_create_table_statement() {
             Ok(s)
         } else {
             Err(ParseError::ParsingError("Expected statement"))
+        }
+    }
+
+    fn parse_select_statement(&mut self) -> Result<Statement, ParseError<'a>> {
+        if self.expect_keyword(Select)? {
+            self.cursor += 1;
+        } else {
+            return Err(ParseError::ParsingError("Expected select keyword"))
+        }
+
+        let item = self.parse_expressions(vec![Keyword(From), Symbol(SemiColon)])?;
+
+        let mut from = None;
+        if self.expect_keyword(From)? {
+            self.cursor += 1;
+            from = self.parse_token(|t| match t {
+                Identifier(SymbolIdentifier, _) => true,
+                _ => false
+            })?;
+
+            if from.is_none() {
+                return Err(ParseError::ParsingError("Expected FROM token"))
+            }
+        }
+
+        Ok(Statement::SelectStatement { item, from })
+    }
+
+    fn parse_expressions(
+        &mut self,
+        delimiters: Vec<Token>
+    ) -> Result<Vec<Expression>, ParseError<'a>> {
+        let mut exps = Vec::new();
+        loop {
+            let token = self.peek_next_token()?;
+
+            if delimiters.iter().any(|d| d == token) {
+                break;
+            }
+
+            if exps.len() > 0 {
+                let was_comma = self.expect_symbol(Comma)?;
+                if was_comma {
+                    self.cursor += 1;
+                } else {
+                    return Err(ParseError::ParsingError("Expected comma"));
+                }
+            }
+
+            let expression = self.parse_expression()?;
+            exps.push(expression);
+        }
+        Ok(exps)
+    }
+
+    fn parse_expression(&mut self) -> Result<Expression, ParseError<'a>> {
+        let expr = self.parse_token(|t| {
+            match t {
+                Identifier(_, _) | PGString(_) | Number(_, _) | Symbol(_) | Keyword(As) => true,
+                _ => false
+            }
+        })?;
+
+        match expr {
+            Some(token) => Ok(Expression::Literal(token)),
+            None => Err(ParseError::ParsingError("Expected expression")),
         }
     }
 
@@ -216,12 +283,6 @@ impl<'a> Parser<'a> {
             None => Err(ParseError::NoMoreTokensError),
         }
     }
-
-    fn get_next_token(&mut self) -> Result<Token, ParseError<'a>> {
-        let token = self.peek_next_token().cloned();
-        self.cursor += 1;
-        token
-    }
 }
 
 #[cfg(test)]
@@ -276,6 +337,103 @@ mod test {
                         ]
                     }
                 ]
+            }
+        );
+    }
+
+    #[test]
+    fn test_basic_select() {
+        let def = Parser::new("SELECT 1;").parse().unwrap();
+        assert_eq!(
+            def,
+            Ast {
+                statements: vec![
+                    Statement::SelectStatement {
+                        item: vec![
+                            Expression::Literal(Number(Integer, "1".to_string()))
+                        ],
+                        from: None,
+                    }
+                ],
+            }
+        );
+
+        let def = Parser::new("SELECT * FROM table_name;").parse().unwrap();
+        assert_eq!(
+            def,
+            Ast {
+                statements: vec![
+                    Statement::SelectStatement {
+                        item: vec![
+                            Expression::Literal(Symbol(Asterisk))
+                        ],
+                        from: Some(Identifier(SymbolIdentifier, "table_name".to_string())),
+                    }
+                ],
+            }
+        );
+
+        let def = Parser::new("SELECT column1, column2, column3 FROM table_name;").parse().unwrap();
+        assert_eq!(
+            def,
+            Ast {
+                statements: vec![
+                    Statement::SelectStatement {
+                        item: vec![
+                            Expression::Literal(Identifier(SymbolIdentifier, "column1".to_string())),
+                            Expression::Literal(Identifier(SymbolIdentifier, "column2".to_string())),
+                            Expression::Literal(Identifier(SymbolIdentifier, "column3".to_string())),
+                        ],
+                        from: Some(Identifier(SymbolIdentifier, "table_name".to_string())),
+                    }
+                ],
+            }
+        );
+    }
+
+    #[ignore]
+    fn test_select_with_alias() {
+        let def = Parser::new("SELECT column1 as \"column_one\" FROM table_name;").parse().unwrap();
+        assert_eq!(
+            def,
+            Ast {
+                statements: vec![
+                    Statement::SelectStatement {
+                        item: vec![
+                            Expression::Literal(Identifier(SymbolIdentifier, "column1".to_string())),
+                            Expression::Literal(Keyword(As)),
+                            Expression::Literal(Identifier(DoubleQuote, "column_one".to_string())),
+                        ],
+                        from: Some(Identifier(SymbolIdentifier, "table_name".to_string())),
+                    }
+                ],
+            }
+        );
+
+        let def = Parser::new("SELECT
+column1 as \"column_one\",
+column2 as \"column_two\",
+column3 as \"column_three\"
+FROM table_name;").parse().unwrap();
+        assert_eq!(
+            def,
+            Ast {
+                statements: vec![
+                    Statement::SelectStatement {
+                        item: vec![
+                            Expression::Literal(Identifier(SymbolIdentifier, "column1".to_string())),
+                            Expression::Literal(Keyword(As)),
+                            Expression::Literal(Identifier(DoubleQuote, "column_one".to_string())),
+                            Expression::Literal(Identifier(SymbolIdentifier, "column2".to_string())),
+                            Expression::Literal(Keyword(As)),
+                            Expression::Literal(Identifier(DoubleQuote, "column_two".to_string())),
+                            Expression::Literal(Identifier(SymbolIdentifier, "column3".to_string())),
+                            Expression::Literal(Keyword(As)),
+                            Expression::Literal(Identifier(DoubleQuote, "column_three".to_string())),
+                        ],
+                        from: Some(Identifier(SymbolIdentifier, "table_name".to_string())),
+                    }
+                ],
             }
         );
     }
