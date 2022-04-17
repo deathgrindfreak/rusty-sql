@@ -1,5 +1,3 @@
-extern crate nom;
-
 use nom::{
     IResult,
     branch::alt,
@@ -7,19 +5,19 @@ use nom::{
     error::{VerboseError, context},
     sequence::{tuple, preceded},
     character::complete::{digit1, char, one_of, multispace0, alpha1, alphanumeric0},
-    combinator::opt,
+    combinator::{opt, eof},
     multi::{many1, separated_list1},
 };
 
 pub type Res<T, U> = IResult<T, U, VerboseError<T>>;
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum NumberType {
     Integer,
     Float,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum KeywordType {
     Select,
     From,
@@ -29,11 +27,13 @@ pub enum KeywordType {
     Insert,
     Into,
     Values,
+
+    // Data types
     Int,
     Text
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum SymbolType {
     SemiColon,
     Asterisk,
@@ -42,13 +42,13 @@ pub enum SymbolType {
     RightParen,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum IdentifierType {
     DoubleQuote,
     Symbol,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Token {
     PGString(String),
     Number(NumberType, String),
@@ -60,13 +60,16 @@ pub enum Token {
 pub fn lex(input: &str) -> Res<&str, Vec<Token>> {
     context(
         "sql",
-        many1(
-            preceded(
-                multispace0,
-                alt((symbol, identifier, string, number))
-            )
-        )
-    )(input)
+        tuple((
+            many1(
+                preceded(
+                    multispace0,
+                    alt((symbol, identifier, string, number))
+                )
+            ),
+            preceded(multispace0, eof)
+        ))
+    )(input).map(|(next_input, res)| (next_input, res.0))
 }
 
 fn symbol(input: &str) -> Res<&str, Token> {
@@ -287,6 +290,18 @@ mod test {
 
     #[test]
     fn test_token() {
+        // Should read entire input
+        assert_eq!(
+            lex("SELECT !"),
+            Err(NomErr::Error(VerboseError {
+                errors: vec![
+                    ("!", VerboseErrorKind::Nom(ErrorKind::Eof)),
+                    ("SELECT !", VerboseErrorKind::Context("sql"))
+                ]
+            }))
+        );
+
+        assert_eq!(lex("SELECT     "), Ok(("", vec![Keyword(Select)])));
         assert_eq!(lex("SELECT"), Ok(("", vec![Keyword(Select)])));
 
         assert_eq!(
