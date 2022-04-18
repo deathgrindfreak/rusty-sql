@@ -2,9 +2,8 @@ use crate::lex::{lex, Token, SymbolType, KeywordType};
 
 use crate::lex::{
     Token::{Symbol, Identifier, Keyword, Number, PGString},
-    SymbolType::{Comma, RightParen, LeftParen, SemiColon, Asterisk},
-    NumberType::{Integer, Float},
-    IdentifierType::{Symbol as SymbolIdentifier, DoubleQuote},
+    SymbolType::{Comma, RightParen, LeftParen, SemiColon},
+    IdentifierType::Symbol as SymbolIdentifier,
     KeywordType::{Int, Text, Create, Table, Select, From, As, Insert, Into, Values},
 };
 
@@ -335,6 +334,14 @@ impl<'a> Parser<'a> {
 #[cfg(test)]
 mod test {
     use super::*;
+
+    use crate::lex::{
+        Token::{Symbol, Identifier, Keyword, Number, PGString},
+        SymbolType::Asterisk,
+        NumberType::{Integer, Float},
+        IdentifierType::{Symbol as SymbolIdentifier, DoubleQuote},
+        KeywordType::{Int, Text, As},
+    };
 
     #[test]
     fn test_create_table() {
