@@ -3,9 +3,9 @@ use crate::lex::{lex, Token, SymbolType, KeywordType};
 use crate::lex::{
     Token::{Symbol, Identifier, Keyword, Number, PGString},
     SymbolType::{Comma, RightParen, LeftParen, SemiColon, Asterisk},
-    NumberType::{Integer},
+    NumberType::{Integer, Float},
     IdentifierType::{Symbol as SymbolIdentifier, DoubleQuote},
-    KeywordType::{Int, Text, Create, Table, Select, From, As},
+    KeywordType::{Int, Text, Create, Table, Select, From, As, Insert, Into, Values},
 };
 
 use nom::error::VerboseError;
@@ -39,7 +39,7 @@ pub enum Statement {
     },
     InsertStatement {
         table: Token,
-        values: Expression,
+        values: Vec<Expression>,
     },
 }
 
@@ -89,6 +89,8 @@ impl<'a> Parser<'a> {
     fn parse_statement(&mut self) -> Result<Statement, ParseError<'a>> {
         if let Ok(s) = self.parse_select_statement() {
             Ok(s)
+        } else if let Ok(s) = self.parse_insert_statement() {
+            Ok(s)
         } else if let Ok(s) = self.parse_create_table_statement() {
             Ok(s)
         } else {
@@ -119,6 +121,51 @@ impl<'a> Parser<'a> {
         }
 
         Ok(Statement::SelectStatement { item, from })
+    }
+
+    fn parse_insert_statement(&mut self) -> Result<Statement, ParseError<'a>> {
+        if self.expect_keyword(Insert)? {
+            self.cursor += 1;
+        } else {
+            return Err(ParseError::ParsingError("Expected insert keyword"));
+        }
+
+        if self.expect_keyword(Into)? {
+            self.cursor += 1;
+        } else {
+            return Err(ParseError::ParsingError("Expected into keyword"));
+        }
+
+        let table_name = self.parse_token(|t| match t {
+            Identifier(SymbolIdentifier, _) => true,
+            _ => false
+        })?;
+
+        if table_name.is_none() {
+            return Err(ParseError::ParsingError("Expected table name"));
+        }
+
+        if self.expect_keyword(Values)? {
+            self.cursor += 1;
+        } else {
+            return Err(ParseError::ParsingError("Expected values keyword"));
+        }
+
+        if self.expect_symbol(LeftParen)? {
+            self.cursor += 1;
+        } else {
+            return Err(ParseError::ParsingError("Expected left paren"));
+        }
+
+        let values = self.parse_expressions(vec![Symbol(RightParen)])?;
+
+        if self.expect_symbol(RightParen)? {
+            self.cursor += 1;
+        } else {
+            return Err(ParseError::ParsingError("Expected right paren"));
+        }
+
+        Ok(Statement::InsertStatement { table: table_name.unwrap(), values })
     }
 
     fn parse_expressions(
@@ -378,6 +425,91 @@ mod test {
             def,
             Ast {
                 statements: vec![
+                    Statement::SelectStatement {
+                        item: vec![
+                            Expression::Literal(Identifier(SymbolIdentifier, "column1".to_string())),
+                            Expression::Literal(Identifier(SymbolIdentifier, "column2".to_string())),
+                            Expression::Literal(Identifier(SymbolIdentifier, "column3".to_string())),
+                        ],
+                        from: Some(Identifier(SymbolIdentifier, "table_name".to_string())),
+                    }
+                ],
+            }
+        );
+    }
+
+    #[test]
+    fn test_insert() {
+        let def = Parser::new(
+            "INSERT INTO table_name VALUES ('a string', 123, 2.3e+12);"
+        ).parse().unwrap();
+        assert_eq!(
+            def,
+            Ast {
+                statements: vec![
+                    Statement::InsertStatement {
+                        table: Identifier(SymbolIdentifier, "table_name".to_string()),
+                        values: vec![
+                            Expression::Literal(PGString("a string".to_string())),
+                            Expression::Literal(Number(Integer, "123".to_string())),
+                            Expression::Literal(Number(Float, "2.3e+12".to_string())),
+                        ]
+                    }
+                ],
+            }
+        );
+    }
+
+    #[test]
+    fn test_multiple_statements() {
+        let def = Parser::new("
+CREATE TABLE table_name (
+    column1 INT,
+    column2 TEXT,
+    column3 INT
+);
+
+INSERT INTO table_name
+VALUES (123, 'a string', 2.3e+12);
+
+SELECT
+    column1,
+    column2,
+    column3
+FROM table_name;
+").parse().unwrap();
+
+        assert_eq!(
+            def,
+            Ast {
+                statements: vec![
+                    Statement::CreateStatement {
+                        name: Identifier(SymbolIdentifier, "table_name".to_string()),
+                        cols: vec![
+                            ColumnDefinition {
+                                name: Identifier(SymbolIdentifier, "column1".to_string()),
+                                data_type: Keyword(Int)
+                            },
+                            ColumnDefinition {
+                                name: Identifier(SymbolIdentifier, "column2".to_string()),
+                                data_type: Keyword(Text)
+                            },
+                            ColumnDefinition {
+                                name: Identifier(SymbolIdentifier, "column3".to_string()),
+                                data_type: Keyword(Int)
+                            },
+                        ]
+                    },
+
+                    Statement::InsertStatement {
+                        table: Identifier(SymbolIdentifier, "table_name".to_string()),
+                        values: vec![
+                            Expression::Literal(Number(Integer, "123".to_string())),
+                            Expression::Literal(PGString("a string".to_string())),
+                            Expression::Literal(Number(Float, "2.3e+12".to_string())),
+                        ]
+                    },
+
                     Statement::SelectStatement {
                         item: vec![
                             Expression::Literal(Identifier(SymbolIdentifier, "column1".to_string())),
