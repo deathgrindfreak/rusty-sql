@@ -1,6 +1,5 @@
-use crate::lex::{lex, Token, SymbolType, KeywordType};
-
 use crate::lex::{
+    lex, Token, SymbolType, KeywordType,
     Token::{Symbol, Identifier, Keyword, Number, PGString},
     SymbolType::{Comma, RightParen, LeftParen, SemiColon},
     IdentifierType::Symbol as SymbolIdentifier,
@@ -11,33 +10,33 @@ use nom::error::VerboseError;
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct Ast {
-    statements: Vec<Statement>
+    pub statements: Vec<Statement>
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Expression {
     Literal(Token),
     Expr(Box<Expression>),
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct ColumnDefinition {
-    name: Token,
-    data_type: Token,
+    pub name: String,
+    pub data_type: KeywordType,
 }
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Statement {
     SelectStatement {
         item: Vec<Expression>,
-        from: Option<Token>,
+        from: Option<String>,
     },
     CreateStatement {
-        name: Token,
+        name: String,
         cols: Vec<ColumnDefinition>,
     },
     InsertStatement {
-        table: Token,
+        table: String,
         values: Vec<Expression>,
     },
 }
@@ -110,8 +109,8 @@ impl<'a> Parser<'a> {
         if self.expect_keyword(From)? {
             self.cursor += 1;
             from = self.parse_token(|t| match t {
-                Identifier(SymbolIdentifier, _) => true,
-                _ => false
+                Identifier(SymbolIdentifier, name) => Some(name.clone()),
+                _ => None
             })?;
 
             if from.is_none() {
@@ -136,8 +135,8 @@ impl<'a> Parser<'a> {
         }
 
         let table_name = self.parse_token(|t| match t {
-            Identifier(SymbolIdentifier, _) => true,
-            _ => false
+            Identifier(SymbolIdentifier, name) => Some(name.clone()),
+            _ => None
         })?;
 
         if table_name.is_none() {
@@ -197,8 +196,8 @@ impl<'a> Parser<'a> {
     fn parse_expression(&mut self) -> Result<Expression, ParseError<'a>> {
         let expr = self.parse_token(|t| {
             match t {
-                Identifier(_, _) | PGString(_) | Number(_, _) | Symbol(_) | Keyword(As) => true,
-                _ => false
+                Identifier(_, _) | PGString(_) | Number(_, _) | Symbol(_) | Keyword(As) => Some(t.clone()),
+                _ => None
             }
         })?;
 
@@ -222,8 +221,8 @@ impl<'a> Parser<'a> {
         }
 
         let table_name = self.parse_token(|t| match t {
-            Identifier(SymbolIdentifier, _) => true,
-            _ => false
+            Identifier(SymbolIdentifier, name) => Some(name.clone()),
+            _ => None
         })?;
 
         if self.expect_symbol(LeftParen)? {
@@ -238,7 +237,7 @@ impl<'a> Parser<'a> {
         match table_name {
             Some(name) => Ok(
                 Statement::CreateStatement {
-                    name,
+                    name: name.to_string(),
                     cols,
                 }
             ),
@@ -264,18 +263,19 @@ impl<'a> Parser<'a> {
             }
 
             let column_name = self.parse_token(|t| match t {
-                Identifier(SymbolIdentifier, _) => true,
-                _ => false,
+                Identifier(SymbolIdentifier, name) => Some(name.clone()),
+                _ => None,
             })?;
 
             let column_type = self.parse_token(|t| match t {
-                Keyword(Int) | Keyword(Text) => true,
-                _ => false,
+                Keyword(Int) => Some(Int),
+                Keyword(Text) => Some(Text),
+                _ => None,
             })?;
 
             match (column_name, column_type) {
                 (Some(name), Some(data_type)) =>
-                    column_definitions.push(ColumnDefinition {name, data_type}),
+                    column_definitions.push(ColumnDefinition {name: name.to_string(), data_type}),
                 (Some(_), None) => return Err(ParseError::ParsingError("Expected data type")),
                 _ => return Err(ParseError::ParsingError("Expecting column definition")),
             }
@@ -306,15 +306,14 @@ impl<'a> Parser<'a> {
         Ok(expected(token))
     }
 
-    fn parse_token<F>(
+    fn parse_token<F, T>(
         &mut self,
         matcher: F
-    ) -> Result<Option<Token>, ParseError<'a>>
-    where F: Fn(&Token) -> bool {
+    ) -> Result<Option<T>, ParseError<'a>>
+    where F: Fn(&Token) -> Option<T> {
         let token = self.peek_next_token()?;
         Ok(
-            if matcher(&token) {
-                let t = token.clone();
+            if let Some(t) = matcher(&token) {
                 self.cursor += 1;
                 Some(t)
             } else {
@@ -351,11 +350,11 @@ mod test {
             Ast {
                 statements: vec![
                     Statement::CreateStatement {
-                        name: Identifier(SymbolIdentifier, "a_table_name".to_string()),
+                        name: "a_table_name".to_string(),
                         cols: vec![
                             ColumnDefinition {
-                                name: Identifier(SymbolIdentifier, "column1".to_string()),
-                                data_type: Keyword(Int)
+                                name: "column1".to_string(),
+                                data_type: Int
                             },
                         ]
                     }
@@ -374,20 +373,11 @@ mod test {
             Ast {
                 statements: vec![
                     Statement::CreateStatement {
-                        name: Identifier(SymbolIdentifier, "table_name".to_string()),
+                        name: "table_name".to_string(),
                         cols: vec![
-                            ColumnDefinition {
-                                name: Identifier(SymbolIdentifier, "column1".to_string()),
-                                data_type: Keyword(Int)
-                            },
-                            ColumnDefinition {
-                                name: Identifier(SymbolIdentifier, "column2".to_string()),
-                                data_type: Keyword(Text)
-                            },
-                            ColumnDefinition {
-                                name: Identifier(SymbolIdentifier, "column3".to_string()),
-                                data_type: Keyword(Int)
-                            },
+                            ColumnDefinition {name: "column1".to_string(), data_type: Int},
+                            ColumnDefinition {name: "column2".to_string(), data_type: Text},
+                            ColumnDefinition {name: "column3".to_string(), data_type: Int},
                         ]
                     }
                 ]
@@ -403,9 +393,7 @@ mod test {
             Ast {
                 statements: vec![
                     Statement::SelectStatement {
-                        item: vec![
-                            Expression::Literal(Number(Integer, "1".to_string()))
-                        ],
+                        item: vec![Expression::Literal(Number(Integer, "1".to_string()))],
                         from: None,
                     }
                 ],
@@ -421,7 +409,7 @@ mod test {
                         item: vec![
                             Expression::Literal(Symbol(Asterisk))
                         ],
-                        from: Some(Identifier(SymbolIdentifier, "table_name".to_string())),
+                        from: Some("table_name".to_string()),
                     }
                 ],
             }
@@ -438,7 +426,7 @@ mod test {
                             Expression::Literal(Identifier(SymbolIdentifier, "column2".to_string())),
                             Expression::Literal(Identifier(SymbolIdentifier, "column3".to_string())),
                         ],
-                        from: Some(Identifier(SymbolIdentifier, "table_name".to_string())),
+                        from: Some("table_name".to_string()),
                     }
                 ],
             }
@@ -455,7 +443,7 @@ mod test {
             Ast {
                 statements: vec![
                     Statement::InsertStatement {
-                        table: Identifier(SymbolIdentifier, "table_name".to_string()),
+                        table: "table_name".to_string(),
                         values: vec![
                             Expression::Literal(PGString("a string".to_string())),
                             Expression::Literal(Number(Integer, "123".to_string())),
@@ -491,25 +479,25 @@ FROM table_name;
             Ast {
                 statements: vec![
                     Statement::CreateStatement {
-                        name: Identifier(SymbolIdentifier, "table_name".to_string()),
+                        name: "table_name".to_string(),
                         cols: vec![
                             ColumnDefinition {
-                                name: Identifier(SymbolIdentifier, "column1".to_string()),
-                                data_type: Keyword(Int)
+                                name: "column1".to_string(),
+                                data_type: Int
                             },
                             ColumnDefinition {
-                                name: Identifier(SymbolIdentifier, "column2".to_string()),
-                                data_type: Keyword(Text)
+                                name: "column2".to_string(),
+                                data_type: Text
                             },
                             ColumnDefinition {
-                                name: Identifier(SymbolIdentifier, "column3".to_string()),
-                                data_type: Keyword(Int)
+                                name: "column3".to_string(),
+                                data_type: Int
                             },
                         ]
                     },
 
                     Statement::InsertStatement {
-                        table: Identifier(SymbolIdentifier, "table_name".to_string()),
+                        table: "table_name".to_string(),
                         values: vec![
                             Expression::Literal(Number(Integer, "123".to_string())),
                             Expression::Literal(PGString("a string".to_string())),
@@ -523,7 +511,7 @@ FROM table_name;
                             Expression::Literal(Identifier(SymbolIdentifier, "column2".to_string())),
                             Expression::Literal(Identifier(SymbolIdentifier, "column3".to_string())),
                         ],
-                        from: Some(Identifier(SymbolIdentifier, "table_name".to_string())),
+                        from: Some("table_name".to_string()),
                     }
                 ],
             }
@@ -543,7 +531,7 @@ FROM table_name;
                             Expression::Literal(Keyword(As)),
                             Expression::Literal(Identifier(DoubleQuote, "column_one".to_string())),
                         ],
-                        from: Some(Identifier(SymbolIdentifier, "table_name".to_string())),
+                        from: Some("table_name".to_string()),
                     }
                 ],
             }
@@ -570,7 +558,7 @@ FROM table_name;").parse().unwrap();
                             Expression::Literal(Keyword(As)),
                             Expression::Literal(Identifier(DoubleQuote, "column_three".to_string())),
                         ],
-                        from: Some(Identifier(SymbolIdentifier, "table_name".to_string())),
+                        from: Some("table_name".to_string()),
                     }
                 ],
             }
