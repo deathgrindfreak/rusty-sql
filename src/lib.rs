@@ -35,7 +35,7 @@ pub struct Column {
 }
 
 #[derive(Debug)]
-pub enum BackendErrorType {
+pub enum BackendError {
     ErrTableDoesNotExist,
     ErrColumnDoesNotExist,
     ErrInvalidSelectItem,
@@ -43,20 +43,20 @@ pub enum BackendErrorType {
     ErrMissingValues,
 }
 
-impl fmt::Display for BackendErrorType {
+impl fmt::Display for BackendError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let err_msg = match self {
-            BackendErrorType::ErrTableDoesNotExist  => "Table does not exist",
-            BackendErrorType::ErrColumnDoesNotExist => "Column does not exist",
-            BackendErrorType::ErrInvalidSelectItem => "Select item is not valid",
-            BackendErrorType::ErrInvalidDatatype => "Invalid datatype",
-            BackendErrorType::ErrMissingValues => "Missing values",
+            BackendError::ErrTableDoesNotExist  => "Table does not exist",
+            BackendError::ErrColumnDoesNotExist => "Column does not exist",
+            BackendError::ErrInvalidSelectItem => "Select item is not valid",
+            BackendError::ErrInvalidDatatype => "Invalid datatype",
+            BackendError::ErrMissingValues => "Missing values",
         };
         write!(f, "{}", err_msg)
     }
 }
 
-impl Error for BackendErrorType {}
+impl Error for BackendError {}
 
 #[derive(Debug, Default, Clone)]
 pub struct MemoryCell(Vec<u8>);
@@ -107,7 +107,7 @@ pub struct Table {
 }
 
 trait Backend {
-    fn execute(&mut self, stmt: Statement) -> Result<(), BackendErrorType>;
+    fn execute(&mut self, stmt: Statement) -> Result<(), BackendError>;
 }
 
 #[derive(Debug, Default)]
@@ -129,7 +129,7 @@ impl InMemoryBackend {
         InMemoryBackend { tables: HashMap::new() }
     }
 
-    pub fn execute(&mut self, stmt: &Statement) -> Result<Execute, BackendErrorType> {
+    pub fn execute(&mut self, stmt: &Statement) -> Result<Execute, BackendError> {
         match stmt {
             CreateStatement { name, cols } => self.create_table(name.to_string(), cols.to_vec()),
             InsertStatement { table, values } => self.insert(table.to_string(), values.to_vec()),
@@ -141,7 +141,7 @@ impl InMemoryBackend {
         &mut self,
         table_name: String,
         cols: Vec<ColumnDefinition>,
-    ) -> Result<Execute, BackendErrorType> {
+    ) -> Result<Execute, BackendError> {
         let mut table = Table::default();
 
         for ColumnDefinition {name, data_type} in cols {
@@ -150,7 +150,7 @@ impl InMemoryBackend {
                 match data_type {
                     Int => ColumnType::IntType,
                     Text => ColumnType::TextType,
-                    _ => return Err(BackendErrorType::ErrInvalidDatatype)
+                    _ => return Err(BackendError::ErrInvalidDatatype)
                 }
             )
         }
@@ -163,15 +163,15 @@ impl InMemoryBackend {
         &mut self,
         table_name: String,
         values: Vec<Expression>,
-    ) -> Result<Execute, BackendErrorType> {
+    ) -> Result<Execute, BackendError> {
         let table = match self.tables.get_mut(&table_name) {
             Some(t) => t,
-            None => return Err(BackendErrorType::ErrTableDoesNotExist),
+            None => return Err(BackendError::ErrTableDoesNotExist),
         };
 
         if values.is_empty() { return Ok(Execute::Empty); }
         if values.len() != table.columns.len() {
-            return Err(BackendErrorType::ErrMissingValues);
+            return Err(BackendError::ErrMissingValues);
         }
 
         let mut row = Vec::new();
@@ -196,10 +196,10 @@ impl InMemoryBackend {
         &mut self,
         table_name: Option<String>,
         item: Vec<Expression>
-    ) -> Result<Execute, BackendErrorType> {
+    ) -> Result<Execute, BackendError> {
         let table = match table_name.and_then(|n| self.tables.get_mut(&n)) {
             Some(t) => t,
-            None => return Err(BackendErrorType::ErrTableDoesNotExist),
+            None => return Err(BackendError::ErrTableDoesNotExist),
         };
 
         let mut results = Vec::new();
@@ -214,7 +214,7 @@ impl InMemoryBackend {
                     Literal(Identifier(Symbol, column_name)) => {
                         let (c, _) = match table.columns.iter().enumerate().find(|(_, col)| *col == column_name) {
                             Some(c) => c,
-                            None => return Err(BackendErrorType::ErrColumnDoesNotExist),
+                            None => return Err(BackendError::ErrColumnDoesNotExist),
                         };
 
                         if is_first_row {

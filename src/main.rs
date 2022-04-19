@@ -8,6 +8,7 @@ use crate::rusty_sql::{
     Execute::Results,
     Column,
     ColumnType::{IntType, TextType},
+    BackendError,
 };
 use crate::rusty_sql::parser::{
     Parser,
@@ -29,7 +30,7 @@ fn main() {
             Ok(l) => {
                 rl.add_history_entry(l.as_str());
                 if let Err(err) = run_sql(&l, &mut backend) {
-                    eprintln!("{:?}", err);
+                    eprintln!("{}", err);
                 }
             },
             Err(ReadlineError::Eof) => {
@@ -56,7 +57,7 @@ fn run_sql<'a>(
             },
             InsertStatement { .. } => {
                 backend.execute(&stmt)?;
-                println!("INSERT 0 1");
+                println!("INSERT");
             },
             SelectStatement { .. } => {
                 if let Results {rows, columns} = backend.execute(&stmt)? {
