@@ -1,16 +1,16 @@
-extern crate sql_db;
+extern crate rusty_sql;
 
 use std::error::Error;
 use rustyline::error::ReadlineError;
 use rustyline::{Editor, Helper};
-use crate::sql_db::util::PrintTable;
-use crate::sql_db::{
+use crate::rusty_sql::util::PrintTable;
+use crate::rusty_sql::{
     InMemoryBackend,
     Execute::Results,
     Column,
     ColumnType::{IntType, TextType},
 };
-use crate::sql_db::parser::{
+use crate::rusty_sql::parser::{
     Parser,
     Ast,
     Statement::{

@@ -1,5 +1,5 @@
 [package]
-name = "sql_db"
+name = "rusty_sql"
 version = "0.1.0"
 edition = "2021"
 

@@ -260,6 +260,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "rusty_sql"
+version = "0.1.0"
+dependencies = [
+ "nom",
+ "rustyline",
+]
+
+[[package]]
 name = "rustyline"
 version = "9.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -294,14 +302,6 @@ name = "smallvec"
 version = "1.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2dd574626839106c320a323308629dcb1acfc96e32a8cba364ddc61ac23ee83"
-
-[[package]]
-name = "sql_db"
-version = "0.1.0"
-dependencies = [
- "nom",
- "rustyline",
-]
 
 [[package]]
 name = "str-buf"
