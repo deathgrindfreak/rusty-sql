@@ -1,7 +1,10 @@
 pub mod lex;
 pub mod parser;
+pub mod util;
 
+use std::fmt;
 use std::collections::HashMap;
+use std::error::Error;
 
 use parser::Expression;
 
@@ -27,8 +30,8 @@ pub enum ColumnType {
 
 #[derive(Debug)]
 pub struct Column {
-    column_type: ColumnType,
-    name: String,
+    pub column_type: ColumnType,
+    pub name: String,
 }
 
 #[derive(Debug)]
@@ -40,17 +43,20 @@ pub enum BackendError {
     ErrMissingValues,
 }
 
-impl<'a> Into<&'a str> for BackendError {
-    fn into(self) -> &'a str {
-        match self {
+impl fmt::Display for BackendError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let err_msg = match self {
             BackendError::ErrTableDoesNotExist  => "Table does not exist",
             BackendError::ErrColumnDoesNotExist => "Column does not exist",
             BackendError::ErrInvalidSelectItem => "Select item is not valid",
             BackendError::ErrInvalidDatatype => "Invalid datatype",
             BackendError::ErrMissingValues => "Missing values",
-        }
+        };
+        write!(f, "{}", err_msg)
     }
 }
+
+impl Error for BackendError {}
 
 #[derive(Debug, Default, Clone)]
 pub struct MemoryCell(Vec<u8>);
