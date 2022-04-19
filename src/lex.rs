@@ -21,6 +21,9 @@ pub enum KeywordType {
     Insert,
     Into,
     Values,
+    Or,
+    True,
+    False,
 
     // Data types
     Int,
@@ -34,6 +37,10 @@ pub enum SymbolType {
     Comma,
     LeftParen,
     RightParen,
+    Equals,
+    NotEquals,
+    Concatenate,
+    Plus,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -67,9 +74,9 @@ pub fn lex(input: &str) -> Res<&str, Vec<Token>> {
     )(input).map(|(next_input, res)| (next_input, res.0))
 }
 
-fn symbol(input: &str) -> Res<&str, Token> {
-    context("symbol", one_of(";*,()"))(input)
-        .map(|(next_input, res)| {
+fn single_char_symbol(input: &str) -> Res<&str, Token> {
+    context("single_char_symbol", one_of(";*,()=+"))
+        (input).map(|(next_input, res)| {
             (
                 next_input,
                 Token::Symbol(match res {
@@ -78,10 +85,30 @@ fn symbol(input: &str) -> Res<&str, Token> {
                     ',' => SymbolType::Comma,
                     '(' => SymbolType::LeftParen,
                     ')' => SymbolType::RightParen,
+                    '=' => SymbolType::Equals,
+                    '+' => SymbolType::Plus,
                     _ => unimplemented!("Bad symbol")
                 })
             )
         })
+}
+
+fn multi_char_symbol(input: &str) -> Res<&str, Token> {
+    context("multi_char_symbol", alt((tag("<>"), tag("||")))
+    )(input).map(|(next_input, res)| {
+            (
+                next_input,
+                Token::Symbol(match res {
+                    "<>" => SymbolType::NotEquals,
+                    "||" => SymbolType::Concatenate,
+                    _ => unimplemented!("Bad symbol")
+                })
+            )
+        })
+}
+
+fn symbol(input: &str) -> Res<&str, Token> {
+    context("symbol", alt((single_char_symbol, multi_char_symbol)))(input)
 }
 
 fn symbol_identifier(input: &str) -> Res<&str, Token> {
@@ -110,6 +137,9 @@ fn symbol_identifier(input: &str) -> Res<&str, Token> {
                 "values" => Token::Keyword(KeywordType::Values),
                 "int" => Token::Keyword(KeywordType::Int),
                 "text" => Token::Keyword(KeywordType::Text),
+                "or" => Token::Keyword(KeywordType::Or),
+                "true" => Token::Keyword(KeywordType::True),
+                "false" => Token::Keyword(KeywordType::False),
                 _ => Token::Identifier(IdentifierType::Symbol, r)
             }
         )
@@ -272,9 +302,9 @@ mod test {
 
     use super::{
         Token::{PGString, Integer, Float, Identifier, Symbol, Keyword},
-        SymbolType::{SemiColon, Asterisk, Comma, LeftParen, RightParen},
+        SymbolType::{SemiColon, Asterisk, Comma, LeftParen, RightParen, Equals, Plus, NotEquals, Concatenate},
         IdentifierType::{DoubleQuote, Symbol as IdentSymbol},
-        KeywordType::{Select, From, As, Table, Create, Insert, Into, Values, Int, Text}
+        KeywordType::{Select, From, As, Table, Create, Insert, Into, Values, Int, Text, Or, True, False}
     };
 
     use super::*;
@@ -383,6 +413,9 @@ FROM test_table_name;"),
         assert_eq!(identifier("Values"), Ok(("", Keyword(Values))));
         assert_eq!(identifier("INT"), Ok(("", Keyword(Int))));
         assert_eq!(identifier("Text"), Ok(("", Keyword(Text))));
+        assert_eq!(identifier("Or"), Ok(("", Keyword(Or))));
+        assert_eq!(identifier("true"), Ok(("", Keyword(True))));
+        assert_eq!(identifier("false"), Ok(("", Keyword(False))));
 
 
         // Symbol-like identifier
@@ -403,15 +436,21 @@ FROM test_table_name;"),
         assert_eq!(symbol(","), Ok(("", Symbol(Comma))));
         assert_eq!(symbol("("), Ok(("", Symbol(LeftParen))));
         assert_eq!(symbol(")"), Ok(("", Symbol(RightParen))));
+        assert_eq!(symbol("="), Ok(("", Symbol(Equals))));
+        assert_eq!(symbol("+"), Ok(("", Symbol(Plus))));
+        assert_eq!(symbol("<>"), Ok(("", Symbol(NotEquals))));
+        assert_eq!(symbol("||"), Ok(("", Symbol(Concatenate))));
         assert_eq!(
             symbol("!"),
             Err(NomErr::Error(VerboseError {
                 errors: vec![
-                    ("!", VerboseErrorKind::Nom(ErrorKind::OneOf)),
-                    ("!", VerboseErrorKind::Context("symbol")),
+                    ("!", VerboseErrorKind::Nom(ErrorKind::Tag)),
+                    ("!", VerboseErrorKind::Nom(ErrorKind::Alt)),
+                    ("!", VerboseErrorKind::Context("multi_char_symbol")),
+                    ("!", VerboseErrorKind::Nom(ErrorKind::Alt)),
+                    ("!", VerboseErrorKind::Context("symbol"))
                 ]
-            }))
-        );
+            })));
     }
 
     #[test]
