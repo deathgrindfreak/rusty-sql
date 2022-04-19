@@ -1,3 +1,4 @@
+use std::fmt;
 use crate::lex::{
     lex, Token, SymbolType, KeywordType,
     Token::{Symbol, Identifier, Keyword, Integer, Float, PGString},
@@ -47,6 +48,19 @@ pub enum ParseError<'a> {
     NoMoreTokensError,
     ParsingError(&'a str),
 }
+
+impl<'a> fmt::Display for ParseError<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let err_msg = match self {
+            ParseError::LexError(err) => "Lex error!",
+            ParseError::NoMoreTokensError => "Expected more tokens!",
+            ParseError::ParsingError(s) => s,
+        };
+        write!(f, "{}", err_msg)
+    }
+}
+
+impl<'a> std::error::Error for ParseError<'a> {}
 
 pub struct Parser<'a> {
     cursor: usize,

@@ -1,6 +1,5 @@
 extern crate rusty_sql;
 
-use std::error::Error;
 use rustyline::error::ReadlineError;
 use rustyline::{Editor, Helper};
 use crate::rusty_sql::util::PrintTable;
@@ -20,36 +19,35 @@ use crate::rusty_sql::parser::{
     },
 };
 
-
 fn main() {
     let mut backend = InMemoryBackend::new();
     let mut rl = Editor::<()>::new();
     println!("Welcome to rusty-sql.");
 
     loop {
-        if let Err(err) = run_repl(&mut backend, &mut rl) {
-            match err {
-                // ReadlineError::Interrupted => {
-
-                // },
-                // ReadlineError::Eof => {
-
-                // },
-                _ => {
-                    eprintln!("err: {:?}", err);
+        match rl.readline("# ") {
+            Ok(l) => {
+                rl.add_history_entry(l.as_str());
+                if let Err(err) = run_sql(&l, &mut backend) {
+                    eprintln!("{:?}", err);
                 }
-            }
-        }
+            },
+            Err(ReadlineError::Eof) => {
+                std::process::exit(0);
+            },
+            Err(ReadlineError::Interrupted) => {
+                // TODO Will probably clear a buffer full of input here
+            },
+            Err(err) => eprintln!("{:?}", err),
+        };
     }
 }
 
-fn run_repl<H>(
+fn run_sql<'a>(
+    line: &'a String,
     backend: &mut InMemoryBackend,
-    rl: &mut Editor<H>,
-) -> Result<(), Box<dyn Error>>
-where H: Helper {
-    let line = rl.readline("# ")?;
-    let Ast { statements } = Parser::new(&line).parse().unwrap();
+) -> Result<(), Box<dyn std::error::Error + 'a>> {
+    let Ast { statements } = Parser::new(&line).parse()?;
     for stmt in statements {
         match stmt {
             CreateStatement { .. } => {
