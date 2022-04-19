@@ -66,6 +66,7 @@ fn run_sql<'a>(
                     let header: Vec<String> = columns.iter().map(|Column { name, .. }| name.clone()).collect();
                     tbl.header(&header);
 
+                    let results = rows.len();
                     for row in rows {
                         tbl.add(
                             &row.iter().enumerate().map(|(i, cell)| {
@@ -82,7 +83,7 @@ fn run_sql<'a>(
 
                     println!("");
                     tbl.print();
-                    println!("");
+                    println!("({} result{})", results, if results > 1 { "s" } else { "" });
                 }
             },
         }
