@@ -6,11 +6,15 @@ use crate::sql_db::{
 };
 
 fn main() {
-    let Ast { statements } = Parser::new(
-        "CREATE TABLE test (column1 INT, column2 TEXT);"
-    ).parse().unwrap();
+    let Ast { statements } = Parser::new("
+CREATE TABLE test (column1 INT, column2 TEXT);
+
+INSERT INTO test VALUES (123, 'a string');
+").parse().unwrap();
 
     let mut backend = InMemoryBackend::new();
-    backend.execute(statements.first().unwrap().clone());
-    println!("{:?}", backend.tables);
+    for stmt in statements {
+        backend.execute(&stmt);
+    }
+    println!("{:?}", backend);
 }

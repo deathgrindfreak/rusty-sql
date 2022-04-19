@@ -12,12 +12,6 @@ use nom::{
 pub type Res<T, U> = IResult<T, U, VerboseError<T>>;
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub enum NumberType {
-    Integer,
-    Float,
-}
-
-#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum KeywordType {
     Select,
     From,
@@ -48,10 +42,11 @@ pub enum IdentifierType {
     Symbol,
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum Token {
     PGString(String),
-    Number(NumberType, String),
+    Integer(i32),
+    Float(f64),
     Identifier(IdentifierType, String),
     Symbol(SymbolType),
     Keyword(KeywordType),
@@ -164,14 +159,13 @@ fn float_optional_int(input: &str) -> Res<&str, Token> {
     )(input).map(|(next_input, res)| {
         (
             next_input,
-            Token::Number(
-                NumberType::Float,
+            Token::Float(
                 match res {
                     (int, _, frac, Some((_, sign, e))) => {
                         vec![int.unwrap_or("0"), ".", frac, "e", sign.unwrap_or("+"), e]
                     },
                     (int, _, frac, None) => vec![int.unwrap_or("0"), ".", frac],
-                }.join("")
+                }.join("").parse().unwrap()
             )
         )
     })
@@ -195,14 +189,13 @@ fn float_optional_frac(input: &str) -> Res<&str, Token> {
     )(input).map(|(next_input, res)| {
         (
             next_input,
-            Token::Number(
-                NumberType::Float,
+            Token::Float(
                 match res {
                     (int, _, frac, Some((_, sign, e))) => {
                         vec![int, ".", frac.unwrap_or("0"), "e", sign.unwrap_or("+"), e]
                     },
                     (int, _, frac, None) => vec![int, ".", frac.unwrap_or("0")],
-                }.join("")
+                }.join("").parse().unwrap()
             )
         )
     })
@@ -220,23 +213,23 @@ fn scientific(input: &str) -> Res<&str, Token> {
     )(input).map(|(next_input, res)| {
         let (int, _, sign, e) = res;
         let s = sign.unwrap_or("+");
+        let n = vec![int, "e", s, e].join("");
+        eprintln!("{:?}", n);
         (
             next_input,
-            Token::Number(
-                if s == "+" {
-                    NumberType::Integer
-                } else {
-                    NumberType::Float
-                },
-                vec![int, "e", s, e].join("")
-            )
+            if s == "+" {
+                // Rust won't parse as integers, so we have to cast
+                Token::Integer(n.parse::<f64>().unwrap() as i32)
+            } else {
+                Token::Float(n.parse().unwrap())
+            }
         )
     })
 }
 
 fn integer(input: &str) -> Res<&str, Token> {
     context("integer", digit1)(input)
-        .map(|(next_input, res)| (next_input,  Token::Number(NumberType::Integer, res.to_string())))
+        .map(|(next_input, res)| (next_input,  Token::Integer(res.parse().unwrap())))
 }
 
 fn number(input: &str) -> Res<&str, Token> {
@@ -278,9 +271,8 @@ mod test {
     };
 
     use super::{
-        Token::{PGString, Number, Identifier, Symbol, Keyword},
+        Token::{PGString, Integer, Float, Identifier, Symbol, Keyword},
         SymbolType::{SemiColon, Asterisk, Comma, LeftParen, RightParen},
-        NumberType::{Integer, Float},
         IdentifierType::{DoubleQuote, Symbol as IdentSymbol},
         KeywordType::{Select, From, As, Table, Create, Insert, Into, Values, Int, Text}
     };
@@ -357,7 +349,7 @@ FROM test_table_name;"),
                     Symbol(LeftParen),
                     PGString("a string!!!".to_string()),
                     Symbol(Comma),
-                    Number(Float, "123.456e+10".to_string()),
+                    Float("123.456e+10".parse().unwrap()),
                     Symbol(RightParen),
                     Symbol(SemiColon)
                 ]
@@ -460,27 +452,27 @@ FROM test_table_name;"),
 
     #[test]
     fn test_number() {
-        assert_eq!(number("0"), Ok(("", Number(Integer, "0".to_string()))));
-        assert_eq!(number("123"), Ok(("", Number(Integer, "123".to_string()))));
+        assert_eq!(number("0"), Ok(("", Integer(0))));
+        assert_eq!(number("123"), Ok(("", Integer(123))));
 
         // Optional fractional part
-        assert_eq!(number("123.123"), Ok(("", Number(Float, "123.123".to_string()))));
-        assert_eq!(number("24.12e-2"), Ok(("", Number(Float, "24.12e-2".to_string()))));
-        assert_eq!(number("5.34e+2"), Ok(("", Number(Float, "5.34e+2".to_string()))));
-        assert_eq!(number("5.e+2"), Ok(("", Number(Float, "5.0e+2".to_string()))));
-        assert_eq!(number("5."), Ok(("", Number(Float, "5.0".to_string()))));
-        assert_eq!(number("5.e1"), Ok(("", Number(Float, "5.0e+1".to_string()))));
+        assert_eq!(number("123.123"), Ok(("", Float(123.123))));
+        assert_eq!(number("24.12e-2"), Ok(("", Float(24.12e-2))));
+        assert_eq!(number("5.34e+2"), Ok(("", Float(5.34e+2))));
+        assert_eq!(number("5.e+2"), Ok(("", Float(5.0e+2))));
+        assert_eq!(number("5."), Ok(("", Float(5.0))));
+        assert_eq!(number("5.e1"), Ok(("", Float(5.0e+1))));
 
         // Optional integer part
-        assert_eq!(number(".123"), Ok(("", Number(Float, "0.123".to_string()))));
-        assert_eq!(number(".12e-2"), Ok(("", Number(Float, "0.12e-2".to_string()))));
-        assert_eq!(number(".34e+2"), Ok(("", Number(Float, "0.34e+2".to_string()))));
-        assert_eq!(number(".1e2"), Ok(("", Number(Float, "0.1e+2".to_string()))));
+        assert_eq!(number(".123"), Ok(("", Float(0.123))));
+        assert_eq!(number(".12e-2"), Ok(("", Float(0.12e-2))));
+        assert_eq!(number(".34e+2"), Ok(("", Float(0.34e+2))));
+        assert_eq!(number(".1e2"), Ok(("", Float(0.1e+2))));
 
         // Scientific notation
-        assert_eq!(number("1e2"), Ok(("", Number(Integer, "1e+2".to_string()))));
-        assert_eq!(number("1e-2"), Ok(("", Number(Float, "1e-2".to_string()))));
-        assert_eq!(number("34e+2"), Ok(("", Number(Integer, "34e+2".to_string()))));
+        assert_eq!(number("1e2"), Ok(("", Integer(100))));
+        assert_eq!(number("1e-2"), Ok(("", Float(1e-2))));
+        assert_eq!(number("34e+2"), Ok(("", Integer(3400))));
 
         // Not a number
         assert_eq!(

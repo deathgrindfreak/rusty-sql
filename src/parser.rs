@@ -1,6 +1,6 @@
 use crate::lex::{
     lex, Token, SymbolType, KeywordType,
-    Token::{Symbol, Identifier, Keyword, Number, PGString},
+    Token::{Symbol, Identifier, Keyword, Integer, Float, PGString},
     SymbolType::{Comma, RightParen, LeftParen, SemiColon},
     IdentifierType::Symbol as SymbolIdentifier,
     KeywordType::{Int, Text, Create, Table, Select, From, As, Insert, Into, Values},
@@ -8,12 +8,12 @@ use crate::lex::{
 
 use nom::error::VerboseError;
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq)]
 pub struct Ast {
     pub statements: Vec<Statement>
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum Expression {
     Literal(Token),
     Expr(Box<Expression>),
@@ -25,7 +25,7 @@ pub struct ColumnDefinition {
     pub data_type: KeywordType,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq)]
 pub enum Statement {
     SelectStatement {
         item: Vec<Expression>,
@@ -103,22 +103,25 @@ impl<'a> Parser<'a> {
             return Err(ParseError::ParsingError("Expected select keyword"))
         }
 
-        let item = self.parse_expressions(vec![Keyword(From), Symbol(SemiColon)])?;
+        Ok(Statement::SelectStatement {
+            item: self.parse_expressions(vec![Keyword(From), Symbol(SemiColon)])?,
+            from: if self.expect_keyword(From)? {
+                self.cursor += 1;
 
-        let mut from = None;
-        if self.expect_keyword(From)? {
-            self.cursor += 1;
-            from = self.parse_token(|t| match t {
-                Identifier(SymbolIdentifier, name) => Some(name.clone()),
-                _ => None
-            })?;
+                let from = self.parse_token(|t| match t {
+                    Identifier(SymbolIdentifier, name) => Some(name.clone()),
+                    _ => None
+                })?;
 
-            if from.is_none() {
-                return Err(ParseError::ParsingError("Expected FROM token"))
+                if from.is_none() {
+                    return Err(ParseError::ParsingError("Expected FROM token"))
+                }
+
+                from
+            } else {
+                None
             }
-        }
-
-        Ok(Statement::SelectStatement { item, from })
+        })
     }
 
     fn parse_insert_statement(&mut self) -> Result<Statement, ParseError<'a>> {
@@ -196,7 +199,7 @@ impl<'a> Parser<'a> {
     fn parse_expression(&mut self) -> Result<Expression, ParseError<'a>> {
         let expr = self.parse_token(|t| {
             match t {
-                Identifier(_, _) | PGString(_) | Number(_, _) | Symbol(_) | Keyword(As) => Some(t.clone()),
+                Identifier(_, _) | PGString(_) | Integer(_) | Float(_) | Symbol(_) | Keyword(As) => Some(t.clone()),
                 _ => None
             }
         })?;
@@ -335,9 +338,8 @@ mod test {
     use super::*;
 
     use crate::lex::{
-        Token::{Symbol, Identifier, Keyword, Number, PGString},
+        Token::{Symbol, Identifier, Keyword, Integer, Float, PGString},
         SymbolType::Asterisk,
-        NumberType::{Integer, Float},
         IdentifierType::{Symbol as SymbolIdentifier, DoubleQuote},
         KeywordType::{Int, Text, As},
     };
@@ -393,7 +395,7 @@ mod test {
             Ast {
                 statements: vec![
                     Statement::SelectStatement {
-                        item: vec![Expression::Literal(Number(Integer, "1".to_string()))],
+                        item: vec![Expression::Literal(Integer(1))],
                         from: None,
                     }
                 ],
@@ -446,8 +448,8 @@ mod test {
                         table: "table_name".to_string(),
                         values: vec![
                             Expression::Literal(PGString("a string".to_string())),
-                            Expression::Literal(Number(Integer, "123".to_string())),
-                            Expression::Literal(Number(Float, "2.3e+12".to_string())),
+                            Expression::Literal(Integer(123)),
+                            Expression::Literal(Float(2.3e+12)),
                         ]
                     }
                 ],
@@ -499,9 +501,9 @@ FROM table_name;
                     Statement::InsertStatement {
                         table: "table_name".to_string(),
                         values: vec![
-                            Expression::Literal(Number(Integer, "123".to_string())),
+                            Expression::Literal(Integer(123)),
                             Expression::Literal(PGString("a string".to_string())),
-                            Expression::Literal(Number(Float, "2.3e+12".to_string())),
+                            Expression::Literal(Float(2.3e+12)),
                         ]
                     },
 

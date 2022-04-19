@@ -9,10 +9,13 @@ use crate::parser::{
     Statement,
     Statement::{CreateStatement, InsertStatement, SelectStatement},
     ColumnDefinition,
+    Expression::Literal,
 };
 
 use crate::lex::{
     KeywordType::{Int, Text},
+    Token,
+    Token::{Integer, PGString},
 };
 
 #[derive(Debug)]
@@ -57,19 +60,60 @@ impl<'a> Into<&'a str> for BackendError {
 }
 
 #[derive(Debug, Default)]
+struct MemoryCell(Vec<u8>);
+
+impl Into<String> for MemoryCell {
+    fn into(self) -> String {
+        String::from_utf8_lossy(&self.0).to_string()
+    }
+}
+
+impl From<String> for MemoryCell {
+    fn from(str: String) -> Self {
+        MemoryCell(str.as_bytes().to_vec())
+    }
+}
+
+impl Into<i32> for MemoryCell {
+    fn into(self) -> i32 {
+        i32::from_le_bytes(
+            self.0.try_into().unwrap_or_else(|v: Vec<u8>| {
+                panic!("Expected Vec of length 4 but found length {}", v.len())
+            })
+        )
+    }
+}
+
+impl From<i32> for MemoryCell {
+    fn from(i: i32) -> Self {
+        MemoryCell(i.to_le_bytes().to_vec())
+    }
+}
+
+impl From<Token> for MemoryCell {
+    fn from(token: Token) -> MemoryCell {
+        match token {
+            Integer(i) => i.clone().into(),
+            PGString(s) => s.clone().into(),
+            _ => unimplemented!("Not a memory cell type"),
+        }
+    }
+}
+
+#[derive(Debug, Default)]
 pub struct Table {
     columns: Vec<String>,
     column_types: Vec<ColumnType>,
-    rows: Vec<Vec<u8>>,
+    rows: Vec<Vec<MemoryCell>>,
 }
 
 trait Backend {
     fn execute(&mut self, stmt: Statement) -> Result<(), BackendError>;
 }
 
+#[derive(Debug, Default)]
 pub struct InMemoryBackend {
-    // TODO Remove pub
-    pub tables: HashMap<String, Table>,
+    tables: HashMap<String, Table>,
 }
 
 impl InMemoryBackend {
@@ -108,8 +152,45 @@ impl InMemoryBackend {
         Ok(())
     }
 
-    fn insert(&self, table: String, values: Vec<Expression>) -> Result<(), BackendError> {
+    fn insert(
+        &mut self,
+        table_name: String,
+        values: Vec<Expression>,
+    ) -> Result<(), BackendError> {
+        let mut table = match self.tables.get_mut(&table_name) {
+            Some(t) => t,
+            None => return Err(BackendError::ErrTableDoesNotExist),
+        };
+
+        if values.is_empty() { return Ok(()); }
+        if values.len() != table.columns.len() {
+            return Err(BackendError::ErrMissingValues);
+        }
+
+        let mut row = Vec::new();
+        for val in values {
+            match val {
+                Literal(e) => {
+                    row.push(e.clone().into());
+                },
+                _ => {
+                    eprintln!("Skipping non-literal");
+                    continue;
+                }
+            }
+        }
+
+        table.rows.push(row);
+
         Ok(())
+    }
+
+    fn token_to_cell(&self, token: &Token) -> MemoryCell {
+        match token {
+            Integer(i) => i.clone().into(),
+            PGString(s) => s.clone().into(),
+            _ => unimplemented!("Not a memory cell type"),
+        }
     }
 
     fn select(
@@ -121,6 +202,3 @@ impl InMemoryBackend {
         Ok(())
     }
 }
-
-// impl Backend for InMemoryBackend {
-// }
