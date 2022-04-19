@@ -2,6 +2,7 @@ extern crate sql_db;
 
 use crate::sql_db::{
     InMemoryBackend,
+    Execute::Results,
     parser::{Parser, Ast}
 };
 
@@ -10,11 +11,15 @@ fn main() {
 CREATE TABLE test (column1 INT, column2 TEXT);
 
 INSERT INTO test VALUES (123, 'a string');
+
+SELECT column1, column2 FROM test;
 ").parse().unwrap();
 
     let mut backend = InMemoryBackend::new();
     for stmt in statements {
-        backend.execute(&stmt);
+        if let Results {rows, columns} = backend.execute(&stmt).expect("Oh no!") {
+            println!("{:?} {:?}", columns, rows);
+        }
     }
     println!("{:?}", backend);
 }
