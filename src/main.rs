@@ -11,6 +11,7 @@ fn main() {
 CREATE TABLE test (column1 INT, column2 TEXT);
 
 INSERT INTO test VALUES (123, 'a string');
+INSERT INTO test VALUES (456, 'Here''s another string');
 
 SELECT column1, column2 FROM test;
 ").parse().unwrap();
