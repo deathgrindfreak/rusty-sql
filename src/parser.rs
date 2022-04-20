@@ -4,7 +4,7 @@ use crate::lex::{
     Token::{Symbol, Identifier, Keyword, Integer, Float, PGString},
     SymbolType::{Comma, RightParen, LeftParen, SemiColon},
     IdentifierType::Symbol as SymbolIdentifier,
-    KeywordType::{Int, Text, Create, Table, Select, From, As, Insert, Into, Values},
+    KeywordType::{Int, Text, Create, Table, Select, From, As, Or, True, False, Insert, Into, Values},
 };
 
 use nom::error::VerboseError;
@@ -17,7 +17,15 @@ pub struct Ast {
 #[derive(Debug, PartialEq, Clone)]
 pub enum Expression {
     Literal(Token),
+    Binary(Box<BinaryExpr>),
     Expr(Box<Expression>),
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub struct BinaryExpr {
+    l: Expression,
+    r: Expression,
+    op: Token,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -46,15 +54,21 @@ pub enum Statement {
 pub enum ParseError<'a> {
     LexError(nom::Err<VerboseError<&'a str>>),
     NoMoreTokensError,
+    ExpectedSymbolError(SymbolType),
+    ExpectedKeywordError(KeywordType),
+    ExpectedIdentifierError,
     ParsingError(&'a str),
 }
 
 impl<'a> fmt::Display for ParseError<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let err_msg = match self {
-            ParseError::LexError(err) => "Lex error!",
-            ParseError::NoMoreTokensError => "Expected more tokens!",
-            ParseError::ParsingError(s) => s,
+            ParseError::LexError(_err) => "Lex error.".to_string(),
+            ParseError::NoMoreTokensError => "Expected more tokens.".to_string(),
+            ParseError::ExpectedIdentifierError => "Expected identifier.".to_string(),
+            ParseError::ExpectedSymbolError(s) => format!("Expected '{}' symbol", s),
+            ParseError::ExpectedKeywordError(k) => format!("Expected '{}' keyword", k),
+            ParseError::ParsingError(s) => s.to_string(),
         };
         write!(f, "{}", err_msg)
     }
@@ -81,17 +95,15 @@ impl<'a> Parser<'a> {
 
         let mut statements = Vec::new();
         while self.cursor < self.tokens.len() {
-            let statement = self.parse_statement()?;
-            statements.push(statement);
+            statements.push(self.parse_statement()?);
 
             let mut at_least_one_semicolon = false;
-            while self.cursor < self.tokens.len() && self.expect_symbol(SemiColon)? {
-                self.cursor += 1;
+            while self.cursor < self.tokens.len() && self.parse_symbol(SemiColon)? {
                 at_least_one_semicolon = true;
             }
 
             if !at_least_one_semicolon {
-                return Err(ParseError::ParsingError("Expected semicolon"));
+                return Err(ParseError::ExpectedSymbolError(SemiColon));
             }
         }
 
@@ -99,88 +111,86 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_statement(&mut self) -> Result<Statement, ParseError<'a>> {
-        if let Ok(s) = self.parse_select_statement() {
-            Ok(s)
-        } else if let Ok(s) = self.parse_insert_statement() {
-            Ok(s)
-        } else if let Ok(s) = self.parse_create_table_statement() {
-            Ok(s)
-        } else {
-            Err(ParseError::ParsingError("Expected statement"))
-        }
+        self.parse_select_statement()
+            .or_else(|err| {
+                match err {
+                    ParseError::ExpectedKeywordError(KeywordType::Select) => {
+                        self.parse_insert_statement()
+                    },
+                    _ => Err(err)
+                }
+            })
+            .or_else(|err| {
+                match err {
+                    ParseError::ExpectedKeywordError(KeywordType::Insert) => {
+                        self.parse_create_table_statement()
+                    },
+                    _ => Err(err)
+                }
+            })
     }
 
     fn parse_select_statement(&mut self) -> Result<Statement, ParseError<'a>> {
-        if self.expect_keyword(Select)? {
-            self.cursor += 1;
+        self.expect_keyword(Select)?;
+        let item = self.parse_expressions(vec![Keyword(From), Symbol(SemiColon)])?;
+        let from = if self.parse_keyword(From)? {
+            Some(self.expect_identifier()?)
         } else {
-            return Err(ParseError::ParsingError("Expected select keyword"))
-        }
-
-        Ok(Statement::SelectStatement {
-            item: self.parse_expressions(vec![Keyword(From), Symbol(SemiColon)])?,
-            from: if self.expect_keyword(From)? {
-                self.cursor += 1;
-
-                let from = self.parse_token(|t| match t {
-                    Identifier(SymbolIdentifier, name) => Some(name.clone()),
-                    _ => None
-                })?;
-
-                if from.is_none() {
-                    return Err(ParseError::ParsingError("Expected FROM token"))
-                }
-
-                from
-            } else {
-                None
-            }
-        })
+            None
+        };
+        Ok(Statement::SelectStatement { item, from })
     }
 
     fn parse_insert_statement(&mut self) -> Result<Statement, ParseError<'a>> {
-        if self.expect_keyword(Insert)? {
-            self.cursor += 1;
-        } else {
-            return Err(ParseError::ParsingError("Expected insert keyword"));
-        }
-
-        if self.expect_keyword(Into)? {
-            self.cursor += 1;
-        } else {
-            return Err(ParseError::ParsingError("Expected into keyword"));
-        }
-
-        let table_name = self.parse_token(|t| match t {
-            Identifier(SymbolIdentifier, name) => Some(name.clone()),
-            _ => None
-        })?;
-
-        if table_name.is_none() {
-            return Err(ParseError::ParsingError("Expected table name"));
-        }
-
-        if self.expect_keyword(Values)? {
-            self.cursor += 1;
-        } else {
-            return Err(ParseError::ParsingError("Expected values keyword"));
-        }
-
-        if self.expect_symbol(LeftParen)? {
-            self.cursor += 1;
-        } else {
-            return Err(ParseError::ParsingError("Expected left paren"));
-        }
-
+        self.expect_keyword(Insert)?;
+        self.expect_keyword(Into)?;
+        let table = self.expect_identifier()?;
+        self.expect_keyword(Values)?;
+        self.expect_symbol(LeftParen)?;
         let values = self.parse_expressions(vec![Symbol(RightParen)])?;
+        self.expect_symbol(RightParen)?;
+        Ok(Statement::InsertStatement { table, values })
+    }
 
-        if self.expect_symbol(RightParen)? {
-            self.cursor += 1;
-        } else {
-            return Err(ParseError::ParsingError("Expected right paren"));
+    fn parse_create_table_statement(&mut self) -> Result<Statement, ParseError<'a>> {
+        self.expect_keyword(Create)?;
+        self.expect_keyword(Table)?;
+        let table_name = self.expect_identifier()?;
+        self.expect_symbol(LeftParen)?;
+
+        let cols = self.parse_column_definitions(Symbol(RightParen))?;
+        self.cursor += 1;
+
+        Ok(Statement::CreateStatement {
+            name: table_name.to_string(),
+            cols,
+        })
+    }
+
+    fn parse_column_definitions(
+        &mut self,
+        delimiter: Token
+    ) -> Result<Vec<ColumnDefinition>, ParseError<'a>> {
+        let mut column_definitions = Vec::new();
+        loop {
+            if self.peek_next_token()? == &delimiter { break }
+
+            if column_definitions.len() > 0 {
+                self.expect_symbol(Comma)?;
+            }
+
+            let column_name = self.expect_identifier()?;
+            let data_type = self.parse_token(|t| match t {
+                Keyword(Int) => Some(Int),
+                Keyword(Text) => Some(Text),
+                _ => None,
+            })?.ok_or(ParseError::ParsingError("Expected data type"))?;
+
+            column_definitions.push(
+                ColumnDefinition { name: column_name.to_string(), data_type }
+            );
         }
-
-        Ok(Statement::InsertStatement { table: table_name.unwrap(), values })
+        Ok(column_definitions)
     }
 
     fn parse_expressions(
@@ -191,17 +201,10 @@ impl<'a> Parser<'a> {
         loop {
             let token = self.peek_next_token()?;
 
-            if delimiters.iter().any(|d| d == token) {
-                break;
-            }
+            if delimiters.iter().any(|d| d == token) { break }
 
             if exps.len() > 0 {
-                let was_comma = self.expect_symbol(Comma)?;
-                if was_comma {
-                    self.cursor += 1;
-                } else {
-                    return Err(ParseError::ParsingError("Expected comma"));
-                }
+                self.expect_symbol(Comma)?;
             }
 
             let expression = self.parse_expression()?;
@@ -210,12 +213,18 @@ impl<'a> Parser<'a> {
         Ok(exps)
     }
 
-    fn parse_expression(&mut self) -> Result<Expression, ParseError<'a>> {
-        let expr = self.parse_token(|t| {
-            match t {
-                Identifier(_, _) | PGString(_) | Integer(_) | Float(_) | Symbol(_) | Keyword(As) => Some(t.clone()),
-                _ => None
-            }
+    fn parse_expression(
+        &mut self,
+    ) -> Result<Expression, ParseError<'a>> {
+        let expr = self.parse_token(|t| match t {
+            Identifier(_, _)
+                | PGString(_)
+                | Integer(_)
+                | Float(_)
+                | Symbol(_)
+                | Keyword(_)
+                => Some(t.clone()),
+            _ => None
         })?;
 
         match expr {
@@ -224,103 +233,43 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_create_table_statement(&mut self) -> Result<Statement, ParseError<'a>> {
-        if self.expect_keyword(Create)? {
-            self.cursor += 1;
-        } else {
-            return Err(ParseError::ParsingError("Expected create keyword"))
-        }
-
-        if self.expect_keyword(Table)? {
-            self.cursor += 1;
-        } else {
-            return Err(ParseError::ParsingError("Expected table keyword"))
-        }
-
-        let table_name = self.parse_token(|t| match t {
-            Identifier(SymbolIdentifier, name) => Some(name.clone()),
+    fn expect_keyword(&mut self, expected: KeywordType) -> Result<(), ParseError<'a>> {
+        self.parse_token(|t| match t {
+            Keyword(s) if *s == expected => Some(()),
             _ => None
-        })?;
-
-        if self.expect_symbol(LeftParen)? {
-            self.cursor += 1;
-        } else {
-            return Err(ParseError::ParsingError("Expected left paren"))
-        }
-
-        let cols = self.parse_column_definitions(Symbol(RightParen))?;
-        self.cursor += 1;
-
-        match table_name {
-            Some(name) => Ok(
-                Statement::CreateStatement {
-                    name: name.to_string(),
-                    cols,
-                }
-            ),
-            _ => Err(ParseError::ParsingError("Expected table name"))
-        }
+        })?.ok_or(ParseError::ExpectedKeywordError(expected))
     }
 
-    fn parse_column_definitions(
-        &mut self,
-        delimiter: Token
-    ) -> Result<Vec<ColumnDefinition>, ParseError<'a>> {
-        let mut column_definitions = Vec::new();
-        loop {
-            if self.peek_next_token()? == &delimiter { break; }
-
-            if column_definitions.len() > 0 {
-                let was_comma = self.expect_symbol(Comma)?;
-                if was_comma {
-                    self.cursor += 1;
-                } else {
-                    return Err(ParseError::ParsingError("Expected comma"));
-                }
-            }
-
-            let column_name = self.parse_token(|t| match t {
-                Identifier(SymbolIdentifier, name) => Some(name.clone()),
-                _ => None,
-            })?;
-
-            let column_type = self.parse_token(|t| match t {
-                Keyword(Int) => Some(Int),
-                Keyword(Text) => Some(Text),
-                _ => None,
-            })?;
-
-            match (column_name, column_type) {
-                (Some(name), Some(data_type)) =>
-                    column_definitions.push(ColumnDefinition {name: name.to_string(), data_type}),
-                (Some(_), None) => return Err(ParseError::ParsingError("Expected data type")),
-                _ => return Err(ParseError::ParsingError("Expecting column definition")),
-            }
-        }
-        Ok(column_definitions)
+    fn parse_keyword(&mut self, expected: KeywordType) -> Result<bool, ParseError<'a>> {
+        self.parse_token(|t| match t {
+            Keyword(s) => Some(*s == expected),
+            _ => None
+        }).map(|o| o.unwrap_or(false))
     }
 
-    fn expect_keyword(&mut self, expected: KeywordType) -> Result<bool, ParseError<'a>> {
-        self.expect_token(|t| match t {
-            Keyword(s) => *s == expected,
-            _ => false
+    fn expect_symbol(&mut self, expected: SymbolType) -> Result<(), ParseError<'a>> {
+        self.parse_token(|t| match t {
+            Symbol(s) if *s == expected => Some(()),
+            _ => None
+        })?.ok_or(ParseError::ExpectedSymbolError(expected))
+    }
+
+    fn parse_symbol(&mut self, expected: SymbolType) -> Result<bool, ParseError<'a>> {
+        self.parse_token(|t| match t {
+            Symbol(s) => Some(*s == expected),
+            _ => None
+        }).map(|o| o.unwrap_or(false))
+    }
+
+    fn expect_identifier(&mut self) -> Result<String, ParseError<'a>> {
+        self.parse_identifier()?.ok_or(ParseError::ExpectedIdentifierError)
+    }
+
+    fn parse_identifier(&mut self) -> Result<Option<String>, ParseError<'a>> {
+        self.parse_token(|t| match t {
+            Identifier(SymbolIdentifier, name) => Some(name.clone()),
+            _ => None,
         })
-    }
-
-    fn expect_symbol(&mut self, expected: SymbolType) -> Result<bool, ParseError<'a>> {
-        self.expect_token(|t| match t {
-            Symbol(s) => *s == expected,
-            _ => false
-        })
-    }
-
-    fn expect_token<F>(
-        &self,
-        expected: F
-    ) -> Result<bool, ParseError<'a>>
-    where F: Fn(&Token) -> bool{
-        let token = self.peek_next_token()?;
-        Ok(expected(token))
     }
 
     fn parse_token<F, T>(
@@ -329,21 +278,14 @@ impl<'a> Parser<'a> {
     ) -> Result<Option<T>, ParseError<'a>>
     where F: Fn(&Token) -> Option<T> {
         let token = self.peek_next_token()?;
-        Ok(
-            if let Some(t) = matcher(&token) {
-                self.cursor += 1;
-                Some(t)
-            } else {
-                None
-            }
-        )
+        Ok(matcher(&token).map(|t| {
+            self.cursor += 1;
+            t
+        }))
     }
 
     fn peek_next_token(&self) -> Result<&Token, ParseError<'a>> {
-        match self.tokens.get(self.cursor) {
-            Some(token) => Ok(token),
-            None => Err(ParseError::NoMoreTokensError),
-        }
+        self.tokens.get(self.cursor).ok_or(ParseError::NoMoreTokensError)
     }
 }
 
@@ -380,10 +322,10 @@ mod test {
 
         let def = Parser::new(
             "CREATE TABLE table_name (
-    column1 INT,
-    column2 TEXT,
-    column3 INT
-);").parse().unwrap();
+                column1 INT,
+                column2 TEXT,
+                column3 INT
+            );").parse().unwrap();
         assert_eq!(
             def,
             Ast {
@@ -474,21 +416,21 @@ mod test {
     #[test]
     fn test_multiple_statements() {
         let def = Parser::new("
-CREATE TABLE table_name (
-    column1 INT,
-    column2 TEXT,
-    column3 INT
-);
+            CREATE TABLE table_name (
+                column1 INT,
+                column2 TEXT,
+                column3 INT
+            );
 
-INSERT INTO table_name
-VALUES (123, 'a string', 2.3e+12);
+            INSERT INTO table_name
+            VALUES (123, 'a string', 2.3e+12);
 
-SELECT
-    column1,
-    column2,
-    column3
-FROM table_name;
-").parse().unwrap();
+            SELECT
+                column1,
+                column2,
+                column3
+            FROM table_name;
+        ").parse().unwrap();
 
         assert_eq!(
             def,
@@ -553,11 +495,13 @@ FROM table_name;
             }
         );
 
-        let def = Parser::new("SELECT
-column1 as \"column_one\",
-column2 as \"column_two\",
-column3 as \"column_three\"
-FROM table_name;").parse().unwrap();
+        let def = Parser::new("
+            SELECT
+                column1 as \"column_one\",
+                column2 as \"column_two\",
+                column3 as \"column_three\"
+            FROM table_name;
+        ").parse().unwrap();
         assert_eq!(
             def,
             Ast {

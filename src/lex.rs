@@ -1,3 +1,4 @@
+use std::fmt;
 use nom::{
     IResult,
     branch::alt,
@@ -30,6 +31,27 @@ pub enum KeywordType {
     Text
 }
 
+impl fmt::Display for KeywordType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let err_msg = match self {
+            KeywordType::Select => "SELECT",
+            KeywordType::From => "FROM",
+            KeywordType::As => "AS",
+            KeywordType::Table => "TABLE",
+            KeywordType::Create => "CREATE",
+            KeywordType::Insert => "INSERT",
+            KeywordType::Into => "INTO",
+            KeywordType::Values => "VALUES",
+            KeywordType::Or => "OR",
+            KeywordType::True => "TRUE",
+            KeywordType::False => "FALSE",
+            KeywordType::Int => "INT",
+            KeywordType::Text => "TEXT",
+        };
+        write!(f, "{}", err_msg)
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum SymbolType {
     SemiColon,
@@ -41,6 +63,23 @@ pub enum SymbolType {
     NotEquals,
     Concatenate,
     Plus,
+}
+
+impl fmt::Display for SymbolType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let err_msg = match self {
+            SymbolType::SemiColon => ";",
+            SymbolType::Asterisk => "*",
+            SymbolType::Comma => ",",
+            SymbolType::LeftParen => "(",
+            SymbolType::RightParen => ")",
+            SymbolType::Equals => "=",
+            SymbolType::NotEquals => "<>",
+            SymbolType::Concatenate => "||",
+            SymbolType::Plus => "+",
+        };
+        write!(f, "{}", err_msg)
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
