@@ -1,14 +1,13 @@
 extern crate rusty_sql;
 
 use rustyline::error::ReadlineError;
-use rustyline::{Editor, Helper};
+use rustyline::{Editor};
 use crate::rusty_sql::util::PrintTable;
 use crate::rusty_sql::{
     InMemoryBackend,
     Execute::Results,
     Column,
     ColumnType::{IntType, TextType},
-    BackendError,
 };
 use crate::rusty_sql::parser::{
     Parser,

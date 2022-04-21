@@ -2,9 +2,15 @@ use std::fmt;
 use crate::lex::{
     lex, Token, SymbolType, KeywordType,
     Token::{Symbol, Identifier, Keyword, Integer, Float, PGString},
-    SymbolType::{Comma, RightParen, LeftParen, SemiColon},
+    SymbolType::{
+        Comma, RightParen, LeftParen, SemiColon,
+        Concatenate, Plus, Equals, NotEquals, Asterisk,
+    },
     IdentifierType::Symbol as SymbolIdentifier,
-    KeywordType::{Int, Text, Create, Table, Select, From, As, Or, True, False, Insert, Into, Values},
+    KeywordType::{
+        Int, Text, Create, Table, Select, From, As,
+        And, Or, True, False, Insert, Into, Values
+    },
 };
 
 use nom::error::VerboseError;
@@ -57,6 +63,7 @@ pub enum ParseError<'a> {
     ExpectedSymbolError(SymbolType),
     ExpectedKeywordError(KeywordType),
     ExpectedIdentifierError,
+    ExpectedBinaryOperator,
     ParsingError(&'a str),
 }
 
@@ -68,12 +75,29 @@ impl<'a> fmt::Display for ParseError<'a> {
             ParseError::ExpectedIdentifierError => write!(f, "Expected identifier."),
             ParseError::ExpectedSymbolError(s) => write!(f, "Expected '{}' symbol", s),
             ParseError::ExpectedKeywordError(k) => write!(f, "Expected '{}' keyword", k),
+            ParseError::ExpectedBinaryOperator => write!(f, "Expected binary operator"),
             ParseError::ParsingError(s) => write!(f, "{}", s),
         }
     }
 }
 
 impl<'a> std::error::Error for ParseError<'a> {}
+
+impl Token {
+    fn binding_power(&self) -> i32 {
+        match self {
+            Keyword(k) => match k {
+                And | Or => 1,
+                _ => 0,
+            },
+            Symbol(s) => match s {
+                Equals | NotEquals | Concatenate | Plus => 3,
+                _ => 0,
+            },
+            _ => 0
+        }
+    }
+}
 
 pub struct Parser<'a> {
     cursor: usize,
@@ -97,7 +121,7 @@ impl<'a> Parser<'a> {
             statements.push(self.parse_statement()?);
 
             let mut at_least_one_semicolon = false;
-            while self.cursor < self.tokens.len() && self.parse_symbol(SemiColon)? {
+            while self.cursor < self.tokens.len() && self.parse_symbol(&SemiColon)? {
                 at_least_one_semicolon = true;
             }
 
@@ -132,7 +156,7 @@ impl<'a> Parser<'a> {
     fn parse_select_statement(&mut self) -> Result<Statement, ParseError<'a>> {
         self.expect_keyword(Select)?;
         let item = self.parse_expressions(vec![Keyword(From), Symbol(SemiColon)])?;
-        let from = if self.parse_keyword(From)? {
+        let from = if self.parse_keyword(&From)? {
             Some(self.expect_identifier()?)
         } else {
             None
@@ -199,14 +223,19 @@ impl<'a> Parser<'a> {
         let mut exps = Vec::new();
         loop {
             let token = self.peek_next_token()?;
-
             if delimiters.iter().any(|d| d == token) { break }
 
             if exps.len() > 0 {
                 self.expect_symbol(Comma)?;
             }
 
-            let expression = self.parse_expression()?;
+            let delims = delimiters.to_vec()
+                                   .iter()
+                                   .chain(&vec![Symbol(Comma), Symbol(RightParen)])
+                                   .map(|x| x.clone())
+                                   .collect();
+
+            let expression = self.parse_expression(delims, 0)?;
             exps.push(expression);
         }
         Ok(exps)
@@ -214,16 +243,63 @@ impl<'a> Parser<'a> {
 
     fn parse_expression(
         &mut self,
+        delimiters: Vec<Token>,
+        min_bp: i32,
     ) -> Result<Expression, ParseError<'a>> {
+        let mut expr = if self.parse_symbol(&LeftParen)? {
+            let delims = delimiters.to_vec()
+                                   .iter()
+                                   .chain(&vec![Symbol(RightParen)])
+                                   .map(|x| x.clone())
+                                   .collect();
+
+            let expr = self.parse_expression(delims, min_bp)?;
+            self.expect_symbol(RightParen)?;
+            expr
+        } else {
+            self.parse_literal_expression()?
+        };
+
+        while self.cursor < self.tokens.len() {
+            let token = self.peek_next_token()?;
+            if delimiters.iter().any(|d| d == token) { break }
+
+            let op = self.parse_token(|t| match t {
+                Keyword(k) => match k {
+                    And | Or => Some(t.clone()),
+                    _ => None
+                },
+                Symbol(s) => match s {
+                    Equals | NotEquals | Concatenate | Plus => Some(t.clone()),
+                    _ => None
+                },
+                _ => None
+            })?.ok_or(ParseError::ExpectedBinaryOperator)?;
+
+            let bp = op.binding_power();
+            if bp < min_bp { break }
+
+            expr = Expression::Binary(Box::new(BinaryExpr {
+                l: expr,
+                r: self.parse_expression(delimiters.to_vec(), bp)?,
+                op
+            }));
+        }
+
+        Ok(expr)
+    }
+
+    fn parse_literal_expression(&mut self) -> Result<Expression, ParseError<'a>> {
         let expr = self.parse_token(|t| match t {
-            Identifier(_, _)
-                | PGString(_)
-                | Integer(_)
-                | Float(_)
-                | Symbol(_)
-                | Keyword(_)
-                => Some(t.clone()),
-            _ => None
+            Keyword(k) => match k {
+                Int | Text => Some(t.clone()),
+                _ => None
+            },
+            Symbol(s) => match s {
+                Asterisk => Some(t.clone()),
+                _ => None
+            },
+            Identifier(_, _) | PGString(_) | Integer(_) | Float(_) => Some(t.clone()),
         })?;
 
         match expr {
@@ -233,29 +309,27 @@ impl<'a> Parser<'a> {
     }
 
     fn expect_keyword(&mut self, expected: KeywordType) -> Result<(), ParseError<'a>> {
-        self.parse_token(|t| match t {
-            Keyword(s) if *s == expected => Some(()),
-            _ => None
-        })?.ok_or(ParseError::ExpectedKeywordError(expected))
+        self.parse_keyword(&expected).and_then(|matched| {
+            if matched { Ok(()) } else { Err(ParseError::ExpectedKeywordError(expected)) }
+        })
     }
 
-    fn parse_keyword(&mut self, expected: KeywordType) -> Result<bool, ParseError<'a>> {
+    fn expect_symbol(&mut self, expected: SymbolType) -> Result<(), ParseError<'a>> {
+        self.parse_symbol(&expected).and_then(|matched| {
+            if matched { Ok(()) } else { Err(ParseError::ExpectedSymbolError(expected)) }
+        })
+    }
+
+    fn parse_keyword(&mut self, expected: &KeywordType) -> Result<bool, ParseError<'a>> {
         self.parse_token(|t| match t {
-            Keyword(s) => Some(*s == expected),
+            Keyword(s) if s == expected => Some(true),
             _ => None
         }).map(|o| o.unwrap_or(false))
     }
 
-    fn expect_symbol(&mut self, expected: SymbolType) -> Result<(), ParseError<'a>> {
+    fn parse_symbol(&mut self, expected: &SymbolType) -> Result<bool, ParseError<'a>> {
         self.parse_token(|t| match t {
-            Symbol(s) if *s == expected => Some(()),
-            _ => None
-        })?.ok_or(ParseError::ExpectedSymbolError(expected))
-    }
-
-    fn parse_symbol(&mut self, expected: SymbolType) -> Result<bool, ParseError<'a>> {
-        self.parse_token(|t| match t {
-            Symbol(s) => Some(*s == expected),
+            Symbol(s) if s == expected => Some(true),
             _ => None
         }).map(|o| o.unwrap_or(false))
     }
@@ -271,10 +345,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_token<F, T>(
-        &mut self,
-        matcher: F
-    ) -> Result<Option<T>, ParseError<'a>>
+    fn parse_token<F, T>(&mut self, matcher: F) -> Result<Option<T>, ParseError<'a>>
     where F: Fn(&Token) -> Option<T> {
         let token = self.peek_next_token()?;
         Ok(matcher(&token).map(|t| {
@@ -344,9 +415,8 @@ mod test {
 
     #[test]
     fn test_basic_select() {
-        let def = Parser::new("SELECT 1;").parse().unwrap();
         assert_eq!(
-            def,
+            Parser::new("SELECT 1;").parse().unwrap(),
             Ast {
                 statements: vec![
                     Statement::SelectStatement {
@@ -357,9 +427,34 @@ mod test {
             }
         );
 
-        let def = Parser::new("SELECT * FROM table_name;").parse().unwrap();
         assert_eq!(
-            def,
+            Parser::new("SELECT 'a string' || ' ' || 'another string';").parse().unwrap(),
+            Ast {
+                statements: vec![
+                    Statement::SelectStatement {
+                        item: vec![
+                            Expression::Binary(Box::new(
+                                BinaryExpr {
+                                    l: Expression::Literal(PGString("a string".to_string())),
+                                    r: Expression::Binary(Box::new(
+                                        BinaryExpr {
+                                            l: Expression::Literal(PGString(" ".to_string())),
+                                            r: Expression::Literal(PGString("another string".to_string())),
+                                            op: Symbol(Concatenate)
+                                        }
+                                    )),
+                                    op: Symbol(Concatenate)
+                                }
+                            ))
+                        ],
+                        from: None,
+                    }
+                ],
+            }
+        );
+
+        assert_eq!(
+            Parser::new("SELECT * FROM table_name;").parse().unwrap(),
             Ast {
                 statements: vec![
                     Statement::SelectStatement {
@@ -372,9 +467,8 @@ mod test {
             }
         );
 
-        let def = Parser::new("SELECT column1, column2, column3 FROM table_name;").parse().unwrap();
         assert_eq!(
-            def,
+            Parser::new("SELECT column1, column2, column3 FROM table_name;").parse().unwrap(),
             Ast {
                 statements: vec![
                     Statement::SelectStatement {
@@ -392,11 +486,8 @@ mod test {
 
     #[test]
     fn test_insert() {
-        let def = Parser::new(
-            "INSERT INTO table_name VALUES ('a string', 123, 2.3e+12);"
-        ).parse().unwrap();
         assert_eq!(
-            def,
+            Parser::new("INSERT INTO table_name VALUES ('a string', 123, 2.3e+12);").parse().unwrap(),
             Ast {
                 statements: vec![
                     Statement::InsertStatement {
@@ -405,6 +496,33 @@ mod test {
                             Expression::Literal(PGString("a string".to_string())),
                             Expression::Literal(Integer(123)),
                             Expression::Literal(Float(2.3e+12)),
+                        ]
+                    }
+                ],
+            }
+        );
+
+        assert_eq!(
+            Parser::new("INSERT INTO table_name VALUES ('some string' || 's', 123 + 2.3e+12);").parse().unwrap(),
+            Ast {
+                statements: vec![
+                    Statement::InsertStatement {
+                        table: "table_name".to_string(),
+                        values: vec![
+                            Expression::Binary(Box::new(
+                                BinaryExpr {
+                                    l: Expression::Literal(PGString("some string".to_string())),
+                                    r: Expression::Literal(PGString("s".to_string())),
+                                    op: Symbol(Concatenate)
+                                }
+                            )),
+                            Expression::Binary(Box::new(
+                                BinaryExpr {
+                                    l: Expression::Literal(Integer(123)),
+                                    r: Expression::Literal(Float(2.3e12)),
+                                    op: Symbol(Plus)
+                                }
+                            ))
                         ]
                     }
                 ],
@@ -475,6 +593,55 @@ mod test {
         );
     }
 
+    #[test]
+    fn test_binary_expressions() {
+        assert_eq!(
+            run_binary_expression("('a string' || ' ' || 'another string')").unwrap(),
+            Expression::Binary(Box::new(
+                BinaryExpr {
+                    l: Expression::Literal(PGString("a string".to_string())),
+                    r: Expression::Binary(Box::new(
+                        BinaryExpr {
+                            l: Expression::Literal(PGString(" ".to_string())),
+                            r: Expression::Literal(PGString("another string".to_string())),
+                            op: Symbol(Concatenate)
+                        }
+                    )),
+                    op: Symbol(Concatenate)
+                }
+            ))
+        );
+
+        assert_eq!(
+            run_binary_expression("(1 + 2 + 3)").unwrap(),
+            Expression::Binary(Box::new(
+                BinaryExpr {
+                    l: Expression::Literal(Integer(1)),
+                    r: Expression::Binary(Box::new(
+                        BinaryExpr {
+                            l: Expression::Literal(Integer(2)),
+                            r: Expression::Literal(Integer(3)),
+                            op: Symbol(Plus)
+                        }
+                    )),
+                    op: Symbol(Plus)
+                }
+            ))
+        );
+    }
+
+    fn run_binary_expression<'a>(e: &'a str) -> Result<Expression, ParseError<'a>> {
+        let mut def = Parser::new(e);
+
+        def.tokens = match lex(def.source) {
+            Ok((_, t)) => t,
+            Err(r) => panic!("{}", r),
+        };
+
+        def.parse_expression(vec![], 0)
+    }
+
+    #[test]
     #[ignore]
     fn test_select_with_alias() {
         let def = Parser::new("SELECT column1 as \"column_one\" FROM table_name;").parse().unwrap();

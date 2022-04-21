@@ -22,6 +22,7 @@ pub enum KeywordType {
     Insert,
     Into,
     Values,
+    And,
     Or,
     True,
     False,
@@ -43,6 +44,7 @@ impl fmt::Display for KeywordType {
             KeywordType::Into => "INTO",
             KeywordType::Values => "VALUES",
             KeywordType::Or => "OR",
+            KeywordType::And => "AND",
             KeywordType::True => "TRUE",
             KeywordType::False => "FALSE",
             KeywordType::Int => "INT",
@@ -177,6 +179,7 @@ fn symbol_identifier(input: &str) -> Res<&str, Token> {
                 "int" => Token::Keyword(KeywordType::Int),
                 "text" => Token::Keyword(KeywordType::Text),
                 "or" => Token::Keyword(KeywordType::Or),
+                "and" => Token::Keyword(KeywordType::And),
                 "true" => Token::Keyword(KeywordType::True),
                 "false" => Token::Keyword(KeywordType::False),
                 _ => Token::Identifier(IdentifierType::Symbol, r)
@@ -343,7 +346,10 @@ mod test {
         Token::{PGString, Integer, Float, Identifier, Symbol, Keyword},
         SymbolType::{SemiColon, Asterisk, Comma, LeftParen, RightParen, Equals, Plus, NotEquals, Concatenate},
         IdentifierType::{DoubleQuote, Symbol as IdentSymbol},
-        KeywordType::{Select, From, As, Table, Create, Insert, Into, Values, Int, Text, Or, True, False}
+        KeywordType::{
+            Select, From, As, Table, Create, Insert,
+            Into, Values, Int, Text, Or, And, True, False
+        }
     };
 
     use super::*;
@@ -453,6 +459,7 @@ FROM test_table_name;"),
         assert_eq!(identifier("INT"), Ok(("", Keyword(Int))));
         assert_eq!(identifier("Text"), Ok(("", Keyword(Text))));
         assert_eq!(identifier("Or"), Ok(("", Keyword(Or))));
+        assert_eq!(identifier("And"), Ok(("", Keyword(And))));
         assert_eq!(identifier("true"), Ok(("", Keyword(True))));
         assert_eq!(identifier("false"), Ok(("", Keyword(False))));
 
