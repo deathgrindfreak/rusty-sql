@@ -305,7 +305,7 @@ impl<'a> Parser<'a> {
     fn parse_literal_expression(&mut self) -> Result<Expression, ParseError<'a>> {
         let expr = self.parse_token(|t| match t {
             Keyword(k) => match k {
-                Int | Text => Some(t.clone()),
+                Int | Text | True | False => Some(t.clone()),
                 _ => None
             },
             Symbol(s) => match s {
@@ -560,6 +560,64 @@ mod test {
                                                 }
                                             )),
                                             op: Symbol(Equals)
+                                        }
+                                    )),
+                                    op: Keyword(And),
+                                }
+                            )),
+                        ),
+                    }
+                ],
+            }
+        );
+
+        assert_eq!(
+            Parser::new("
+                SELECT * FROM table_name
+                WHERE column1 = 123
+                AND column2 = 'foo' || column3
+                OR column4 = true;
+            ").parse().unwrap(),
+            Ast {
+                statements: vec![
+                    Statement::SelectStatement {
+                        item: vec![
+                            Expression::Literal(Symbol(Asterisk))
+                        ],
+                        from: Some("table_name".to_string()),
+                        where_cond: Some(
+                            Expression::Binary(Box::new(
+                                BinaryExpr {
+                                    l: Expression::Binary(Box::new(
+                                        BinaryExpr {
+                                            l: Expression::Literal(Identifier(SymbolIdentifier, "column1".to_string())),
+                                            r: Expression::Literal(Integer(123)),
+                                            op: Symbol(Equals)
+                                        }
+                                    )),
+                                    r: Expression::Binary(Box::new(
+                                        BinaryExpr {
+                                            l: Expression::Binary(Box::new(
+                                                BinaryExpr {
+                                                    l: Expression::Literal(Identifier(SymbolIdentifier, "column2".to_string())),
+                                                    r: Expression::Binary(Box::new(
+                                                        BinaryExpr {
+                                                            l: Expression::Literal(PGString("foo".to_string())),
+                                                            r: Expression::Literal(Identifier(SymbolIdentifier, "column3".to_string())),
+                                                            op: Symbol(Concatenate)
+                                                        }
+                                                    )),
+                                                    op: Symbol(Equals)
+                                                }
+                                            )),
+                                            r: Expression::Binary(Box::new(
+                                                BinaryExpr {
+                                                    l: Expression::Literal(Identifier(SymbolIdentifier, "column4".to_string())),
+                                                    r: Expression::Literal(Keyword(True)),
+                                                    op: Symbol(Equals)
+                                                }
+                                            )),
+                                            op: Keyword(Or),
                                         }
                                     )),
                                     op: Keyword(And),
