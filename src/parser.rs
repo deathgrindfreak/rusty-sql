@@ -62,15 +62,14 @@ pub enum ParseError<'a> {
 
 impl<'a> fmt::Display for ParseError<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let err_msg = match self {
-            ParseError::LexError(_err) => "Lex error.".to_string(),
-            ParseError::NoMoreTokensError => "Expected more tokens.".to_string(),
-            ParseError::ExpectedIdentifierError => "Expected identifier.".to_string(),
-            ParseError::ExpectedSymbolError(s) => format!("Expected '{}' symbol", s),
-            ParseError::ExpectedKeywordError(k) => format!("Expected '{}' keyword", k),
-            ParseError::ParsingError(s) => s.to_string(),
-        };
-        write!(f, "{}", err_msg)
+        match self {
+            ParseError::LexError(_err) => write!(f, "Lex error."),
+            ParseError::NoMoreTokensError => write!(f, "Expected more tokens."),
+            ParseError::ExpectedIdentifierError => write!(f, "Expected identifier."),
+            ParseError::ExpectedSymbolError(s) => write!(f, "Expected '{}' symbol", s),
+            ParseError::ExpectedKeywordError(k) => write!(f, "Expected '{}' keyword", k),
+            ParseError::ParsingError(s) => write!(f, "{}", s),
+        }
     }
 }
 

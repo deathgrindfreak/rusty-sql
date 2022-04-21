@@ -37,7 +37,7 @@ fn main() {
                 std::process::exit(0);
             },
             Err(ReadlineError::Interrupted) => {
-                // TODO Will probably clear a buffer full of input here
+                // TODO Will probably clear a buffer full of input here (multi-line input mode)
             },
             Err(err) => eprintln!("{:?}", err),
         };
