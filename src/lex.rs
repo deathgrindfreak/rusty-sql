@@ -16,6 +16,7 @@ pub type Res<T, U> = IResult<T, U, VerboseError<T>>;
 pub enum KeywordType {
     Select,
     From,
+    Where,
     As,
     Table,
     Create,
@@ -37,6 +38,7 @@ impl fmt::Display for KeywordType {
         let err_msg = match self {
             KeywordType::Select => "SELECT",
             KeywordType::From => "FROM",
+            KeywordType::Where => "WHERE",
             KeywordType::As => "AS",
             KeywordType::Table => "TABLE",
             KeywordType::Create => "CREATE",
@@ -170,6 +172,7 @@ fn symbol_identifier(input: &str) -> Res<&str, Token> {
             match r.to_lowercase().as_str() {
                 "select" => Token::Keyword(KeywordType::Select),
                 "from" => Token::Keyword(KeywordType::From),
+                "where" => Token::Keyword(KeywordType::Where),
                 "as" => Token::Keyword(KeywordType::As),
                 "table" => Token::Keyword(KeywordType::Table),
                 "create" => Token::Keyword(KeywordType::Create),
@@ -347,7 +350,7 @@ mod test {
         SymbolType::{SemiColon, Asterisk, Comma, LeftParen, RightParen, Equals, Plus, NotEquals, Concatenate},
         IdentifierType::{DoubleQuote, Symbol as IdentSymbol},
         KeywordType::{
-            Select, From, As, Table, Create, Insert,
+            Select, From, Where, As, Table, Create, Insert,
             Into, Values, Int, Text, Or, And, True, False
         }
     };

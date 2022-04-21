@@ -133,7 +133,8 @@ impl InMemoryBackend {
         match stmt {
             CreateStatement { name, cols } => self.create_table(name.to_string(), cols.to_vec()),
             InsertStatement { table, values } => self.insert(table.to_string(), values.to_vec()),
-            SelectStatement { item, from } => self.select(from.to_owned(), item.to_vec()),
+            SelectStatement { item, from, where_cond } =>
+                self.select(from.to_owned(), item.to_vec(), where_cond.to_owned()),
         }
     }
 
@@ -195,7 +196,8 @@ impl InMemoryBackend {
     fn select(
         &mut self,
         table_name: Option<String>,
-        item: Vec<Expression>
+        item: Vec<Expression>,
+        _where_cond: Option<Expression>,
     ) -> Result<Execute, BackendError> {
         let table = match table_name.and_then(|n| self.tables.get_mut(&n)) {
             Some(t) => t,

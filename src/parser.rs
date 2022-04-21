@@ -8,7 +8,7 @@ use crate::lex::{
     },
     IdentifierType::Symbol as SymbolIdentifier,
     KeywordType::{
-        Int, Text, Create, Table, Select, From, As,
+        Int, Text, Create, Table, Select, From, Where, As,
         And, Or, True, False, Insert, Into, Values
     },
 };
@@ -45,6 +45,7 @@ pub enum Statement {
     SelectStatement {
         item: Vec<Expression>,
         from: Option<String>,
+        where_cond: Option<Expression>,
     },
     CreateStatement {
         name: String,
@@ -155,13 +156,22 @@ impl<'a> Parser<'a> {
 
     fn parse_select_statement(&mut self) -> Result<Statement, ParseError<'a>> {
         self.expect_keyword(Select)?;
-        let item = self.parse_expressions(vec![Keyword(From), Symbol(SemiColon)])?;
+
+        let delimiters = vec![Keyword(From), Symbol(SemiColon)];
+
+        let item = self.parse_expressions(delimiters.to_vec())?;
         let from = if self.parse_keyword(&From)? {
             Some(self.expect_identifier()?)
         } else {
             None
         };
-        Ok(Statement::SelectStatement { item, from })
+
+        let where_cond = if self.parse_keyword(&Where)? {
+            Some(self.parse_expression(delimiters, 0)?)
+        } else {
+            None
+        };
+        Ok(Statement::SelectStatement { item, from, where_cond })
     }
 
     fn parse_insert_statement(&mut self) -> Result<Statement, ParseError<'a>> {
@@ -277,7 +287,10 @@ impl<'a> Parser<'a> {
             })?.ok_or(ParseError::ExpectedBinaryOperator)?;
 
             let bp = op.binding_power();
-            if bp < min_bp { break }
+            if bp < min_bp {
+                self.cursor -= 1;
+                break
+            }
 
             expr = Expression::Binary(Box::new(BinaryExpr {
                 l: expr,
@@ -365,9 +378,9 @@ mod test {
 
     use crate::lex::{
         Token::{Symbol, Identifier, Keyword, Integer, Float, PGString},
-        SymbolType::Asterisk,
+        SymbolType::{Asterisk, Equals},
         IdentifierType::{Symbol as SymbolIdentifier, DoubleQuote},
-        KeywordType::{Int, Text, As},
+        KeywordType::{Int, Text, As, And},
     };
 
     #[test]
@@ -422,6 +435,7 @@ mod test {
                     Statement::SelectStatement {
                         item: vec![Expression::Literal(Integer(1))],
                         from: None,
+                        where_cond: None,
                     }
                 ],
             }
@@ -448,6 +462,7 @@ mod test {
                             ))
                         ],
                         from: None,
+                        where_cond: None,
                     }
                 ],
             }
@@ -462,6 +477,7 @@ mod test {
                             Expression::Literal(Symbol(Asterisk))
                         ],
                         from: Some("table_name".to_string()),
+                        where_cond: None,
                     }
                 ],
             }
@@ -478,6 +494,78 @@ mod test {
                             Expression::Literal(Identifier(SymbolIdentifier, "column3".to_string())),
                         ],
                         from: Some("table_name".to_string()),
+                        where_cond: None,
+                    }
+                ],
+            }
+        );
+    }
+
+    #[test]
+    fn test_select_with_where() {
+        assert_eq!(
+            Parser::new("SELECT * FROM table_name WHERE column1 = 123;").parse().unwrap(),
+            Ast {
+                statements: vec![
+                    Statement::SelectStatement {
+                        item: vec![
+                            Expression::Literal(Symbol(Asterisk))
+                        ],
+                        from: Some("table_name".to_string()),
+                        where_cond: Some(
+                            Expression::Binary(Box::new(
+                                BinaryExpr {
+                                    l: Expression::Literal(Identifier(SymbolIdentifier, "column1".to_string())),
+                                    r: Expression::Literal(Integer(123)),
+                                    op: Symbol(Equals)
+                                }
+                            ))
+                        ),
+                    }
+                ],
+            }
+        );
+
+        assert_eq!(
+            Parser::new("
+                SELECT * FROM table_name
+                WHERE column1 = 123
+                AND column2 = 'foo' || column3;
+            ").parse().unwrap(),
+            Ast {
+                statements: vec![
+                    Statement::SelectStatement {
+                        item: vec![
+                            Expression::Literal(Symbol(Asterisk))
+                        ],
+                        from: Some("table_name".to_string()),
+                        where_cond: Some(
+                            Expression::Binary(Box::new(
+                                BinaryExpr {
+                                    l: Expression::Binary(Box::new(
+                                        BinaryExpr {
+                                            l: Expression::Literal(Identifier(SymbolIdentifier, "column1".to_string())),
+                                            r: Expression::Literal(Integer(123)),
+                                            op: Symbol(Equals)
+                                        }
+                                    )),
+                                    r: Expression::Binary(Box::new(
+                                        BinaryExpr {
+                                            l: Expression::Literal(Identifier(SymbolIdentifier, "column2".to_string())),
+                                            r: Expression::Binary(Box::new(
+                                                BinaryExpr {
+                                                    l: Expression::Literal(PGString("foo".to_string())),
+                                                    r: Expression::Literal(Identifier(SymbolIdentifier, "column3".to_string())),
+                                                    op: Symbol(Concatenate)
+                                                }
+                                            )),
+                                            op: Symbol(Equals)
+                                        }
+                                    )),
+                                    op: Keyword(And),
+                                }
+                            )),
+                        ),
                     }
                 ],
             }
@@ -587,6 +675,7 @@ mod test {
                             Expression::Literal(Identifier(SymbolIdentifier, "column3".to_string())),
                         ],
                         from: Some("table_name".to_string()),
+                        where_cond: None,
                     }
                 ],
             }
@@ -656,6 +745,7 @@ mod test {
                             Expression::Literal(Identifier(DoubleQuote, "column_one".to_string())),
                         ],
                         from: Some("table_name".to_string()),
+                        where_cond: None,
                     }
                 ],
             }
@@ -685,6 +775,7 @@ mod test {
                             Expression::Literal(Identifier(DoubleQuote, "column_three".to_string())),
                         ],
                         from: Some("table_name".to_string()),
+                        where_cond: None,
                     }
                 ],
             }
