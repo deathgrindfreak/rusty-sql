@@ -12,20 +12,33 @@ use crate::parser::{
     Statement,
     Statement::{CreateStatement, InsertStatement, SelectStatement},
     ColumnDefinition,
-    Expression::Literal,
+    Expression::{Literal, Binary},
 };
 
 use crate::lex::{
-    KeywordType::{Int, Text},
+    KeywordType::{Int, Text, True, False, And, Or},
+    SymbolType::{Equals, NotEquals, Concatenate, Plus},
     Token,
-    Token::{Integer, PGString, Identifier},
-    IdentifierType::Symbol,
+    Token::{Integer, PGString, Identifier, Keyword, Symbol},
+    IdentifierType::Symbol as SymbolIdentifier,
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ColumnType {
     TextType,
     IntType,
+    BoolType,
+}
+
+impl Into<ColumnType> for Token {
+    fn into(self) -> ColumnType {
+        match self {
+            PGString(_) => ColumnType::TextType,
+            Integer(_) => ColumnType::IntType,
+            Keyword(True) | Keyword(False) => ColumnType::BoolType,
+            _ => unimplemented!("Not a column type")
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -41,6 +54,7 @@ pub enum BackendError {
     ErrInvalidSelectItem,
     ErrInvalidDatatype,
     ErrMissingValues,
+    ErrInvalidOperands,
 }
 
 impl fmt::Display for BackendError {
@@ -51,6 +65,7 @@ impl fmt::Display for BackendError {
             BackendError::ErrInvalidSelectItem => "Select item is not valid",
             BackendError::ErrInvalidDatatype => "Invalid datatype",
             BackendError::ErrMissingValues => "Missing values",
+            BackendError::ErrInvalidOperands => "Invalid operands",
         };
         write!(f, "{}", err_msg)
     }
@@ -58,7 +73,7 @@ impl fmt::Display for BackendError {
 
 impl Error for BackendError {}
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct MemoryCell(Vec<u8>);
 
 impl Into<String> for MemoryCell {
@@ -89,11 +104,28 @@ impl From<i32> for MemoryCell {
     }
 }
 
+impl Into<bool> for MemoryCell {
+    fn into(self) -> bool {
+        self.0.len() == 1
+    }
+}
+
+impl From<bool> for MemoryCell {
+    fn from(b: bool) -> Self {
+        MemoryCell(if b { vec![1] } else { vec![] })
+    }
+}
+
 impl From<Token> for MemoryCell {
     fn from(token: Token) -> MemoryCell {
         match token {
             Integer(i) => i.clone().into(),
             PGString(s) => s.clone().into(),
+            Keyword(k) => match k {
+                True => MemoryCell(vec![1]),
+                False => MemoryCell(vec![]),
+                _ => unimplemented!("Not a memory cell type"),
+            }
             _ => unimplemented!("Not a memory cell type"),
         }
     }
@@ -104,6 +136,120 @@ pub struct Table {
     columns: Vec<String>,
     column_types: Vec<ColumnType>,
     rows: Vec<Vec<MemoryCell>>,
+}
+
+impl Table {
+    fn evaluate(
+        &self,
+        row_index: usize,
+        exp: Expression
+    ) -> Result<(MemoryCell, String, ColumnType), BackendError> {
+        match exp {
+            Literal(e) => {
+                if let Identifier(SymbolIdentifier, id) = e.clone() {
+                    let (c, _) = self.columns.iter()
+                                             .enumerate()
+                                             .find(|(_, col)| **col == id)
+                                             .ok_or(BackendError::ErrColumnDoesNotExist)?;
+                    return Ok((self.rows[row_index][c].clone(), id, self.column_types[c].clone()));
+                }
+
+                Ok((e.clone().into(), "?column?".to_string(), e.into()))
+            },
+            Binary { l, r, op } => {
+                let (l_cell, _, l_type) = self.evaluate(row_index, *l.clone())?;
+                let (r_cell, _, r_type) = self.evaluate(row_index, *r.clone())?;
+                let true_cell: MemoryCell = Keyword(True).into();
+                let false_cell: MemoryCell = Keyword(False).into();
+
+                match op {
+                    Symbol(s) => match s {
+                        Equals => {
+                            let eq = l_cell == r_cell;
+                            Ok((
+                                match (l_type, r_type) {
+                                    (ColumnType::TextType, ColumnType::TextType)
+                                        | (ColumnType::IntType, ColumnType::IntType)
+                                        | (ColumnType::BoolType, ColumnType::BoolType)
+                                        if eq => true_cell,
+                                    _ => false_cell
+                                },
+                                "?column?".to_string(),
+                                ColumnType::BoolType
+                            ))
+                        },
+                        NotEquals => {
+                            Ok((
+                                if l_type != r_type || l != r {
+                                    true_cell
+                                } else {
+                                    false_cell
+                                },
+                                "?column?".to_string(),
+                                ColumnType::BoolType
+                            ))
+                        },
+                        Concatenate => {
+                            if l_type != ColumnType::TextType || r_type != ColumnType::TextType {
+                                return Err(BackendError::ErrInvalidOperands);
+                            }
+
+                            let mut l_string: String = l_cell.into();
+                            let r_string: String = r_cell.into();
+                            l_string.push_str(r_string.as_str());
+
+                            Ok((l_string.into(), "?column?".to_string(), ColumnType::TextType))
+                        },
+                        Plus => {
+                            if l_type != ColumnType::IntType || r_type != ColumnType::IntType {
+                                return Err(BackendError::ErrInvalidOperands);
+                            }
+
+                            let l_int: i32 = l_cell.into();
+                            let r_int: i32 = r_cell.into();
+
+                            Ok(((l_int + r_int).into(), "?column?".to_string(), ColumnType::IntType))
+                        },
+                        _ => todo!(),
+                    },
+                    Keyword(k) => {
+                        match k {
+                            And => {
+                                if l_type != ColumnType::BoolType || r_type != ColumnType::BoolType {
+                                    return Err(BackendError::ErrInvalidOperands);
+                                }
+
+                                let l_b: bool = l_cell.into();
+                                let r_b: bool = r_cell.into();
+
+                                Ok((
+                                    if l_b && r_b { true_cell } else { false_cell },
+                                    "?column?".to_string(),
+                                    ColumnType::BoolType
+                                ))
+                            },
+                            Or => {
+                                if l_type != ColumnType::BoolType || r_type != ColumnType::BoolType {
+                                    return Err(BackendError::ErrInvalidOperands);
+                                }
+
+                                let l_b: bool = l_cell.into();
+                                let r_b: bool = r_cell.into();
+
+                                Ok((
+                                    if l_b || r_b { true_cell } else { false_cell },
+                                    "?column?".to_string(),
+                                    ColumnType::BoolType
+                                ))
+                            },
+                            _ => todo!()
+                        }
+                    },
+                    _ => todo!()
+                }
+            }
+        }
+    }
 }
 
 trait Backend {
@@ -213,7 +359,7 @@ impl InMemoryBackend {
             let mut result = Vec::new();
             for itm in &item {
                 match itm {
-                    Literal(Identifier(Symbol, column_name)) => {
+                    Literal(Identifier(SymbolIdentifier, column_name)) => {
                         let (c, _) = match table.columns.iter().enumerate().find(|(_, col)| *col == column_name) {
                             Some(c) => c,
                             None => return Err(BackendError::ErrColumnDoesNotExist),
@@ -239,4 +385,5 @@ impl InMemoryBackend {
 
         Ok(Execute::Results{rows: results, columns})
     }
+
 }

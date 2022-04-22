@@ -7,7 +7,7 @@ use crate::rusty_sql::{
     InMemoryBackend,
     Execute::Results,
     Column,
-    ColumnType::{IntType, TextType},
+    ColumnType::{IntType, TextType, BoolType},
 };
 use crate::rusty_sql::parser::{
     Parser,
@@ -74,7 +74,11 @@ fn run_sql<'a>(
                                         let r: i32 = cell.clone().into();
                                         r.to_string()
                                     },
-                                    TextType => cell.clone().into()
+                                    TextType => cell.clone().into(),
+                                    BoolType => {
+                                        let r: bool = cell.clone().into();
+                                        if r { "t" } else { "f" }.to_string()
+                                    }
                                 }
                             }).collect()
                         );

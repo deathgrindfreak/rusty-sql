@@ -23,15 +23,11 @@ pub struct Ast {
 #[derive(Debug, PartialEq, Clone)]
 pub enum Expression {
     Literal(Token),
-    Binary(Box<BinaryExpr>),
-    Expr(Box<Expression>),
-}
-
-#[derive(Debug, PartialEq, Clone)]
-pub struct BinaryExpr {
-    l: Expression,
-    r: Expression,
-    op: Token,
+    Binary {
+        l: Box<Expression>,
+        r: Box<Expression>,
+        op: Token,
+    },
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -292,11 +288,11 @@ impl<'a> Parser<'a> {
                 break
             }
 
-            expr = Expression::Binary(Box::new(BinaryExpr {
-                l: expr,
-                r: self.parse_expression(delimiters.to_vec(), bp)?,
+            expr = Expression::Binary {
+                l: Box::new(expr),
+                r: Box::new(self.parse_expression(delimiters.to_vec(), bp)?),
                 op
-            }));
+            };
         }
 
         Ok(expr)
@@ -447,19 +443,21 @@ mod test {
                 statements: vec![
                     Statement::SelectStatement {
                         item: vec![
-                            Expression::Binary(Box::new(
-                                BinaryExpr {
-                                    l: Expression::Literal(PGString("a string".to_string())),
-                                    r: Expression::Binary(Box::new(
-                                        BinaryExpr {
-                                            l: Expression::Literal(PGString(" ".to_string())),
-                                            r: Expression::Literal(PGString("another string".to_string())),
-                                            op: Symbol(Concatenate)
-                                        }
-                                    )),
+                            Expression::Binary {
+                                l: Box::new(
+                                    Expression::Literal(PGString("a string".to_string()))
+                                ),
+                                r: Box::new(Expression::Binary {
+                                    l: Box::new(
+                                        Expression::Literal(PGString(" ".to_string()))
+                                    ),
+                                    r: Box::new(
+                                        Expression::Literal(PGString("another string".to_string()))
+                                    ),
                                     op: Symbol(Concatenate)
-                                }
-                            ))
+                                }),
+                                op: Symbol(Concatenate)
+                            }
                         ],
                         from: None,
                         where_cond: None,
@@ -513,13 +511,11 @@ mod test {
                         ],
                         from: Some("table_name".to_string()),
                         where_cond: Some(
-                            Expression::Binary(Box::new(
-                                BinaryExpr {
-                                    l: Expression::Literal(Identifier(SymbolIdentifier, "column1".to_string())),
-                                    r: Expression::Literal(Integer(123)),
-                                    op: Symbol(Equals)
-                                }
-                            ))
+                            Expression::Binary {
+                                l: Box::new(Expression::Literal(Identifier(SymbolIdentifier, "column1".to_string()))),
+                                r: Box::new(Expression::Literal(Integer(123))),
+                                op: Symbol(Equals)
+                            }
                         ),
                     }
                 ],
@@ -540,31 +536,23 @@ mod test {
                         ],
                         from: Some("table_name".to_string()),
                         where_cond: Some(
-                            Expression::Binary(Box::new(
-                                BinaryExpr {
-                                    l: Expression::Binary(Box::new(
-                                        BinaryExpr {
-                                            l: Expression::Literal(Identifier(SymbolIdentifier, "column1".to_string())),
-                                            r: Expression::Literal(Integer(123)),
-                                            op: Symbol(Equals)
-                                        }
-                                    )),
-                                    r: Expression::Binary(Box::new(
-                                        BinaryExpr {
-                                            l: Expression::Literal(Identifier(SymbolIdentifier, "column2".to_string())),
-                                            r: Expression::Binary(Box::new(
-                                                BinaryExpr {
-                                                    l: Expression::Literal(PGString("foo".to_string())),
-                                                    r: Expression::Literal(Identifier(SymbolIdentifier, "column3".to_string())),
-                                                    op: Symbol(Concatenate)
-                                                }
-                                            )),
-                                            op: Symbol(Equals)
-                                        }
-                                    )),
-                                    op: Keyword(And),
-                                }
-                            )),
+                            Expression::Binary {
+                                l: Box::new(Expression::Binary {
+                                    l: Box::new(Expression::Literal(Identifier(SymbolIdentifier, "column1".to_string()))),
+                                    r: Box::new(Expression::Literal(Integer(123))),
+                                    op: Symbol(Equals)
+                                }),
+                                r: Box::new(Expression::Binary {
+                                    l: Box::new(Expression::Literal(Identifier(SymbolIdentifier, "column2".to_string()))),
+                                    r: Box::new(Expression::Binary {
+                                        l: Box::new(Expression::Literal(PGString("foo".to_string()))),
+                                        r: Box::new(Expression::Literal(Identifier(SymbolIdentifier, "column3".to_string()))),
+                                        op: Symbol(Concatenate)
+                                    }),
+                                    op: Symbol(Equals)
+                                }),
+                                op: Keyword(And),
+                            }
                         ),
                     }
                 ],
@@ -586,43 +574,31 @@ mod test {
                         ],
                         from: Some("table_name".to_string()),
                         where_cond: Some(
-                            Expression::Binary(Box::new(
-                                BinaryExpr {
-                                    l: Expression::Binary(Box::new(
-                                        BinaryExpr {
-                                            l: Expression::Literal(Identifier(SymbolIdentifier, "column1".to_string())),
-                                            r: Expression::Literal(Integer(123)),
-                                            op: Symbol(Equals)
-                                        }
-                                    )),
-                                    r: Expression::Binary(Box::new(
-                                        BinaryExpr {
-                                            l: Expression::Binary(Box::new(
-                                                BinaryExpr {
-                                                    l: Expression::Literal(Identifier(SymbolIdentifier, "column2".to_string())),
-                                                    r: Expression::Binary(Box::new(
-                                                        BinaryExpr {
-                                                            l: Expression::Literal(PGString("foo".to_string())),
-                                                            r: Expression::Literal(Identifier(SymbolIdentifier, "column3".to_string())),
-                                                            op: Symbol(Concatenate)
-                                                        }
-                                                    )),
-                                                    op: Symbol(Equals)
-                                                }
-                                            )),
-                                            r: Expression::Binary(Box::new(
-                                                BinaryExpr {
-                                                    l: Expression::Literal(Identifier(SymbolIdentifier, "column4".to_string())),
-                                                    r: Expression::Literal(Keyword(True)),
-                                                    op: Symbol(Equals)
-                                                }
-                                            )),
-                                            op: Keyword(Or),
-                                        }
-                                    )),
-                                    op: Keyword(And),
-                                }
-                            )),
+                            Expression::Binary {
+                                l: Box::new(Expression::Binary {
+                                    l: Box::new(Expression::Literal(Identifier(SymbolIdentifier, "column1".to_string()))),
+                                    r: Box::new(Expression::Literal(Integer(123))),
+                                    op: Symbol(Equals)
+                                }),
+                                r: Box::new(Expression::Binary {
+                                    l: Box::new(Expression::Binary {
+                                        l: Box::new(Expression::Literal(Identifier(SymbolIdentifier, "column2".to_string()))),
+                                        r: Box::new(Expression::Binary {
+                                            l: Box::new(Expression::Literal(PGString("foo".to_string()))),
+                                            r: Box::new(Expression::Literal(Identifier(SymbolIdentifier, "column3".to_string()))),
+                                            op: Symbol(Concatenate)
+                                        }),
+                                        op: Symbol(Equals)
+                                    }),
+                                    r: Box::new(Expression::Binary {
+                                        l: Box::new(Expression::Literal(Identifier(SymbolIdentifier, "column4".to_string()))),
+                                        r: Box::new(Expression::Literal(Keyword(True))),
+                                        op: Symbol(Equals)
+                                    }),
+                                    op: Keyword(Or),
+                                }),
+                                op: Keyword(And),
+                            },
                         ),
                     }
                 ],
@@ -655,20 +631,16 @@ mod test {
                     Statement::InsertStatement {
                         table: "table_name".to_string(),
                         values: vec![
-                            Expression::Binary(Box::new(
-                                BinaryExpr {
-                                    l: Expression::Literal(PGString("some string".to_string())),
-                                    r: Expression::Literal(PGString("s".to_string())),
-                                    op: Symbol(Concatenate)
-                                }
-                            )),
-                            Expression::Binary(Box::new(
-                                BinaryExpr {
-                                    l: Expression::Literal(Integer(123)),
-                                    r: Expression::Literal(Float(2.3e12)),
-                                    op: Symbol(Plus)
-                                }
-                            ))
+                            Expression::Binary {
+                                l: Box::new(Expression::Literal(PGString("some string".to_string()))),
+                                r: Box::new(Expression::Literal(PGString("s".to_string()))),
+                                op: Symbol(Concatenate)
+                            },
+                            Expression::Binary {
+                                l: Box::new(Expression::Literal(Integer(123))),
+                                r: Box::new(Expression::Literal(Float(2.3e12))),
+                                op: Symbol(Plus)
+                            },
                         ]
                     }
                 ],
@@ -744,36 +716,28 @@ mod test {
     fn test_binary_expressions() {
         assert_eq!(
             run_binary_expression("('a string' || ' ' || 'another string')").unwrap(),
-            Expression::Binary(Box::new(
-                BinaryExpr {
-                    l: Expression::Literal(PGString("a string".to_string())),
-                    r: Expression::Binary(Box::new(
-                        BinaryExpr {
-                            l: Expression::Literal(PGString(" ".to_string())),
-                            r: Expression::Literal(PGString("another string".to_string())),
-                            op: Symbol(Concatenate)
-                        }
-                    )),
+            Expression::Binary {
+                l: Box::new(Expression::Literal(PGString("a string".to_string()))),
+                r: Box::new(Expression::Binary {
+                    l: Box::new(Expression::Literal(PGString(" ".to_string()))),
+                    r: Box::new(Expression::Literal(PGString("another string".to_string()))),
                     op: Symbol(Concatenate)
-                }
-            ))
+                }),
+                op: Symbol(Concatenate)
+            }
         );
 
         assert_eq!(
             run_binary_expression("(1 + 2 + 3)").unwrap(),
-            Expression::Binary(Box::new(
-                BinaryExpr {
-                    l: Expression::Literal(Integer(1)),
-                    r: Expression::Binary(Box::new(
-                        BinaryExpr {
-                            l: Expression::Literal(Integer(2)),
-                            r: Expression::Literal(Integer(3)),
-                            op: Symbol(Plus)
-                        }
-                    )),
+            Expression::Binary {
+                l: Box::new(Expression::Literal(Integer(1))),
+                r: Box::new(Expression::Binary {
+                    l: Box::new(Expression::Literal(Integer(2))),
+                    r: Box::new(Expression::Literal(Integer(3))),
                     op: Symbol(Plus)
-                }
-            ))
+                }),
+                op: Symbol(Plus)
+            }
         );
     }
 
