@@ -76,43 +76,43 @@ impl Error for BackendError {}
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct MemoryCell(Vec<u8>);
 
-impl Into<String> for MemoryCell {
-    fn into(self) -> String {
-        String::from_utf8_lossy(&self.0).to_string()
+impl From<MemoryCell> for String {
+    fn from(MemoryCell(mc): MemoryCell) -> String {
+        String::from_utf8_lossy(&mc).to_string()
     }
 }
 
-impl From<String> for MemoryCell {
-    fn from(str: String) -> Self {
-        MemoryCell(str.as_bytes().to_vec())
+impl Into<MemoryCell> for String {
+    fn into(self) -> MemoryCell {
+        MemoryCell(self.as_bytes().to_vec())
     }
 }
 
-impl Into<i32> for MemoryCell {
-    fn into(self) -> i32 {
+impl From<MemoryCell> for i32 {
+    fn from(MemoryCell(mc): MemoryCell) -> Self {
         i32::from_le_bytes(
-            self.0.try_into().unwrap_or_else(|v: Vec<u8>| {
+            mc.try_into().unwrap_or_else(|v: Vec<u8>| {
                 panic!("Expected Vec of length 4 but found length {}", v.len())
             })
         )
     }
 }
 
-impl From<i32> for MemoryCell {
-    fn from(i: i32) -> Self {
-        MemoryCell(i.to_le_bytes().to_vec())
+impl Into<MemoryCell> for i32 {
+    fn into(self) -> MemoryCell {
+        MemoryCell(self.to_le_bytes().to_vec())
     }
 }
 
-impl Into<bool> for MemoryCell {
-    fn into(self) -> bool {
-        self.0.len() == 1
+impl From<MemoryCell> for bool {
+    fn from(MemoryCell(mc): MemoryCell) -> Self {
+        mc.len() == 1
     }
 }
 
-impl From<bool> for MemoryCell {
-    fn from(b: bool) -> Self {
-        MemoryCell(if b { vec![1] } else { vec![] })
+impl Into<MemoryCell> for bool {
+    fn into(self) -> MemoryCell {
+        MemoryCell(if self { vec![1] } else { vec![] })
     }
 }
 
@@ -139,7 +139,7 @@ pub struct Table {
 }
 
 impl Table {
-    fn evaluate(
+    pub fn evaluate(
         &self,
         row_index: usize,
         exp: Expression
@@ -151,10 +151,10 @@ impl Table {
                                              .enumerate()
                                              .find(|(_, col)| **col == id)
                                              .ok_or(BackendError::ErrColumnDoesNotExist)?;
-                    return Ok((self.rows[row_index][c].clone(), id, self.column_types[c].clone()));
+                    Ok((self.rows[row_index][c].clone(), id, self.column_types[c].clone()))
+                } else {
+                    Ok((e.clone().into(), "?column?".to_string(), e.into()))
                 }
-
-                Ok((e.clone().into(), "?column?".to_string(), e.into()))
             },
             Binary { l, r, op } => {
                 let (l_cell, _, l_type) = self.evaluate(row_index, *l.clone())?;
@@ -386,4 +386,99 @@ impl InMemoryBackend {
         Ok(Execute::Results{rows: results, columns})
     }
 
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use super::ColumnType::{IntType, TextType, BoolType};
+    use crate::parser::Expression::{Binary, Literal};
+    use crate::lex::{
+        Token::{Integer, Symbol},
+        SymbolType::Plus
+    };
+
+    #[test]
+    fn test_table_evaluation() {
+        let r = eval_table_expr(Binary {
+            l: Box::new(Literal(Integer(1))),
+            r: Box::new(Literal(Integer(1))),
+            op: Symbol(Plus),
+        });
+
+        assert_eq!(r, (2i32.into(), "?column?".to_string(), IntType));
+
+        let r = eval_table_expr(Binary {
+            l: Box::new(Literal(PGString("one".to_string()))),
+            r: Box::new(Literal(PGString("two".to_string()))),
+            op: Symbol(Concatenate),
+        });
+
+        assert_eq!(r, ("onetwo".to_string().into(), "?column?".to_string(), TextType));
+
+        let r = eval_table_expr(Binary {
+            l: Box::new(Literal(Keyword(True))),
+            r: Box::new(Literal(Keyword(False))),
+            op: Keyword(Or),
+        });
+
+        assert_eq!(r, (true.into(), "?column?".to_string(), BoolType));
+
+        let r = eval_table_expr(Binary {
+            l: Box::new(Literal(Keyword(False))),
+            r: Box::new(Literal(Keyword(True))),
+            op: Keyword(And),
+        });
+
+        assert_eq!(r, (false.into(), "?column?".to_string(), BoolType));
+    }
+
+    #[test]
+    fn test_row_evaluation() {
+        let e = Binary {
+            l: Box::new(Literal(Identifier(SymbolIdentifier, "column1".to_string()))),
+            r: Box::new(Literal(Keyword(True))),
+            op: Symbol(Equals),
+        };
+
+        let r = Table {
+            columns: vec!["column1".to_string()],
+            column_types: vec![BoolType],
+            rows: vec![
+                vec![true.into()]
+            ],
+        }.evaluate(0, e).unwrap();
+
+        assert_eq!(r, (true.into(), "?column?".to_string(), BoolType));
+
+        let e = Binary {
+            l: Box::new(Literal(Identifier(SymbolIdentifier, "column1".to_string()))),
+            r: Box::new(
+                Binary {
+                    l: Box::new(Literal(Identifier(SymbolIdentifier, "column2".to_string()))),
+                    r: Box::new(Literal(Integer(3))),
+                    op: Symbol(Plus),
+                }
+            ),
+            op: Symbol(Equals),
+        };
+
+        let r = Table {
+            columns: vec!["column1".to_string(), "column2".to_string()],
+            column_types: vec![IntType, IntType],
+            rows: vec![
+                vec![5.into(), 2.into()]
+            ],
+        }.evaluate(0, e).unwrap();
+
+        assert_eq!(r, (true.into(), "?column?".to_string(), BoolType));
+    }
+
+    fn eval_table_expr(e: Expression) -> (MemoryCell, String, ColumnType) {
+        Table {
+            columns: vec![],
+            column_types: vec![],
+            rows: vec![],
+        }.evaluate(0, e).unwrap()
+    }
 }
