@@ -42,10 +42,26 @@ impl Into<ColumnType> for Token {
     }
 }
 
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ColumnName {
+    DefaultName,
+    Name(String),
+}
+
+impl Into<String> for ColumnName {
+    fn into(self) -> String {
+        match self {
+            ColumnName::DefaultName => "?column?".to_string(),
+            ColumnName::Name(s) => s,
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub struct Column {
     pub column_type: ColumnType,
-    pub column_name: String,
+    pub column_name: ColumnName,
 }
 
 #[derive(Debug)]
@@ -152,7 +168,7 @@ impl Table {
         &self,
         row_index: usize,
         exp: &Expression
-    ) -> Result<(MemoryCell, String, ColumnType), BackendError> {
+    ) -> Result<(MemoryCell, ColumnName, ColumnType), BackendError> {
         match exp {
             Literal(e) => {
                 if let Identifier(SymbolIdentifier, id) = e.clone() {
@@ -160,9 +176,9 @@ impl Table {
                                              .enumerate()
                                              .find(|(_, col)| **col == id)
                                              .ok_or(BackendError::ErrColumnDoesNotExist)?;
-                    Ok((self.rows[row_index][c].clone(), id, self.column_types[c].clone()))
+                    Ok((self.rows[row_index][c].clone(), ColumnName::Name(id), self.column_types[c].clone()))
                 } else {
-                    Ok((e.clone().into(), "?column?".to_string(), e.clone().into()))
+                    Ok((e.clone().into(), ColumnName::DefaultName, e.clone().into()))
                 }
             },
             Binary { l, r, op } => {
@@ -183,7 +199,7 @@ impl Table {
                                         if eq => true_cell,
                                     _ => false_cell
                                 },
-                                "?column?".to_string(),
+                                ColumnName::DefaultName,
                                 ColumnType::BoolType
                             ))
                         },
@@ -194,7 +210,7 @@ impl Table {
                                 } else {
                                     false_cell
                                 },
-                                "?column?".to_string(),
+                                ColumnName::DefaultName,
                                 ColumnType::BoolType
                             ))
                         },
@@ -207,7 +223,7 @@ impl Table {
                             let r_string: String = r_cell.into();
                             l_string.push_str(r_string.as_str());
 
-                            Ok((l_string.into(), "?column?".to_string(), ColumnType::TextType))
+                            Ok((l_string.into(), ColumnName::DefaultName, ColumnType::TextType))
                         },
                         Plus => {
                             if l_type != ColumnType::IntType || r_type != ColumnType::IntType {
@@ -217,7 +233,7 @@ impl Table {
                             let l_int: i32 = l_cell.into();
                             let r_int: i32 = r_cell.into();
 
-                            Ok(((l_int + r_int).into(), "?column?".to_string(), ColumnType::IntType))
+                            Ok(((l_int + r_int).into(), ColumnName::DefaultName, ColumnType::IntType))
                         },
                         _ => todo!(),
                     },
@@ -233,7 +249,7 @@ impl Table {
 
                                 Ok((
                                     if l_b && r_b { true_cell } else { false_cell },
-                                    "?column?".to_string(),
+                                    ColumnName::DefaultName,
                                     ColumnType::BoolType
                                 ))
                             },
@@ -247,7 +263,7 @@ impl Table {
 
                                 Ok((
                                     if l_b || r_b { true_cell } else { false_cell },
-                                    "?column?".to_string(),
+                                    ColumnName::DefaultName,
                                     ColumnType::BoolType
                                 ))
                             },
@@ -300,10 +316,11 @@ impl InMemoryBackend {
                     if let Execute::Results {rows, columns} = self.execute(&stmt)? {
                         let mut tbl = PrintTable::new();
 
-                        let header: Vec<String> = columns.iter()
-                                                        .map(|Column { column_name, .. }| column_name.clone())
-                                                        .collect();
-                        tbl.header(&header);
+                        tbl.header(
+                            &columns.iter()
+                                    .map(|c| c.column_name.clone().into())
+                                    .collect()
+                        );
 
                         let results = rows.len();
                         for row in rows {
@@ -451,6 +468,7 @@ impl InMemoryBackend {
 mod test {
     use super::*;
     use super::ColumnType::{IntType, TextType, BoolType};
+    use super::ColumnName::{Name, DefaultName};
     use crate::parser::Expression::{Binary, Literal};
     use crate::lex::{
         Token::{Integer, Symbol},
@@ -474,11 +492,11 @@ mod test {
                 columns: vec![
                     Column {
                         column_type: TextType,
-                        column_name: "name".to_string()
+                        column_name: Name("name".to_string())
                     },
                     Column {
                         column_type: IntType,
-                        column_name: "age".to_string()
+                        column_name: Name("age".to_string())
                     }
                 ],
                 rows: vec![
@@ -500,11 +518,11 @@ mod test {
                 columns: vec![
                     Column {
                         column_type: IntType,
-                        column_name: "age".to_string()
+                        column_name: DefaultName
                     },
                     Column {
                         column_type: TextType,
-                        column_name: "name".to_string()
+                        column_name: Name("name".to_string())
                     },
                 ],
                 rows: vec![
@@ -523,7 +541,7 @@ mod test {
                 columns: vec![
                     Column {
                         column_type: TextType,
-                        column_name: "name".to_string()
+                        column_name: Name("name".to_string())
                     }
                 ],
                 rows: vec![
@@ -548,7 +566,7 @@ mod test {
             op: Symbol(Plus),
         });
 
-        assert_eq!(r, (2i32.into(), "?column?".to_string(), IntType));
+        assert_eq!(r, (2i32.into(), ColumnName::DefaultName, IntType));
 
         let r = eval_table_expr(Binary {
             l: Box::new(Literal(PGString("one".to_string()))),
@@ -556,7 +574,7 @@ mod test {
             op: Symbol(Concatenate),
         });
 
-        assert_eq!(r, ("onetwo".to_string().into(), "?column?".to_string(), TextType));
+        assert_eq!(r, ("onetwo".to_string().into(), ColumnName::DefaultName, TextType));
 
         let r = eval_table_expr(Binary {
             l: Box::new(Literal(Keyword(True))),
@@ -564,7 +582,7 @@ mod test {
             op: Keyword(Or),
         });
 
-        assert_eq!(r, (true.into(), "?column?".to_string(), BoolType));
+        assert_eq!(r, (true.into(), ColumnName::DefaultName, BoolType));
 
         let r = eval_table_expr(Binary {
             l: Box::new(Literal(Keyword(False))),
@@ -572,7 +590,7 @@ mod test {
             op: Keyword(And),
         });
 
-        assert_eq!(r, (false.into(), "?column?".to_string(), BoolType));
+        assert_eq!(r, (false.into(), ColumnName::DefaultName, BoolType));
     }
 
     #[test]
@@ -591,7 +609,7 @@ mod test {
             ],
         }.evaluate(0, &e).unwrap();
 
-        assert_eq!(r, (true.into(), "?column?".to_string(), BoolType));
+        assert_eq!(r, (true.into(), ColumnName::DefaultName, BoolType));
 
         let e = Binary {
             l: Box::new(Literal(Identifier(SymbolIdentifier, "column1".to_string()))),
@@ -613,10 +631,10 @@ mod test {
             ],
         }.evaluate(0, &e).unwrap();
 
-        assert_eq!(r, (true.into(), "?column?".to_string(), BoolType));
+        assert_eq!(r, (true.into(), ColumnName::DefaultName, BoolType));
     }
 
-    fn eval_table_expr(e: Expression) -> (MemoryCell, String, ColumnType) {
+    fn eval_table_expr(e: Expression) -> (MemoryCell, ColumnName, ColumnType) {
         Table::default().evaluate(0, &e).unwrap()
     }
 }
