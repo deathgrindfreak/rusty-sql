@@ -8,7 +8,7 @@ use crate::lex::{
     },
     IdentifierType::Symbol as SymbolIdentifier,
     KeywordType::{
-        Int, Text, Create, Table, Select, From, Where, As,
+        Int, Text, Create, Table, Select, From, Where,
         And, Or, True, False, Insert, Into, Values
     },
 };
