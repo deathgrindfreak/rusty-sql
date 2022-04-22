@@ -17,7 +17,7 @@ use crate::parser::{
 
 use crate::lex::{
     KeywordType::{Int, Text, True, False, And, Or},
-    SymbolType::{Equals, NotEquals, Concatenate, Plus},
+    SymbolType::{Equals, NotEquals, Concatenate, Plus, Asterisk},
     Token,
     Token::{Integer, PGString, Identifier, Keyword, Symbol},
     IdentifierType::Symbol as SymbolIdentifier,
@@ -44,7 +44,7 @@ impl Into<ColumnType> for Token {
 #[derive(Debug)]
 pub struct Column {
     pub column_type: ColumnType,
-    pub name: String,
+    pub column_name: String,
 }
 
 #[derive(Debug)]
@@ -142,7 +142,7 @@ impl Table {
     pub fn evaluate(
         &self,
         row_index: usize,
-        exp: Expression
+        exp: &Expression
     ) -> Result<(MemoryCell, String, ColumnType), BackendError> {
         match exp {
             Literal(e) => {
@@ -153,12 +153,12 @@ impl Table {
                                              .ok_or(BackendError::ErrColumnDoesNotExist)?;
                     Ok((self.rows[row_index][c].clone(), id, self.column_types[c].clone()))
                 } else {
-                    Ok((e.clone().into(), "?column?".to_string(), e.into()))
+                    Ok((e.clone().into(), "?column?".to_string(), e.clone().into()))
                 }
             },
             Binary { l, r, op } => {
-                let (l_cell, _, l_type) = self.evaluate(row_index, *l.clone())?;
-                let (r_cell, _, r_type) = self.evaluate(row_index, *r.clone())?;
+                let (l_cell, _, l_type) = self.evaluate(row_index, &l.clone())?;
+                let (r_cell, _, r_type) = self.evaluate(row_index, &r.clone())?;
                 let true_cell: MemoryCell = Keyword(True).into();
                 let false_cell: MemoryCell = Keyword(False).into();
 
@@ -343,47 +343,51 @@ impl InMemoryBackend {
         &mut self,
         table_name: Option<String>,
         item: Vec<Expression>,
-        _where_cond: Option<Expression>,
+        where_cond: Option<Expression>,
     ) -> Result<Execute, BackendError> {
-        let table = match table_name.and_then(|n| self.tables.get_mut(&n)) {
-            Some(t) => t,
-            None => return Err(BackendError::ErrTableDoesNotExist),
+        if item.is_empty() {
+            return Ok(Execute::Results {
+                columns: Vec::new(),
+                rows: Vec::new()
+            });
+        }
+
+        let d = Table::default();
+        let table = match table_name {
+            Some(n) => self.tables.get(&n).ok_or(BackendError::ErrTableDoesNotExist)?,
+            None => &d
         };
 
         let mut results = Vec::new();
-        let mut columns = Vec::new();
+        let mut cols = Vec::new();
 
-        for (i, row) in table.rows.iter().enumerate() {
+        for i in 0..table.rows.len() {
             let is_first_row = i == 0;
+
+            if let Some(ref expr) = where_cond {
+                let (val, _, _) = table.evaluate(i, &expr)?;
+                let b: bool = val.into();
+                if !b { continue }
+            }
 
             let mut result = Vec::new();
             for itm in &item {
-                match itm {
-                    Literal(Identifier(SymbolIdentifier, column_name)) => {
-                        let (c, _) = match table.columns.iter().enumerate().find(|(_, col)| *col == column_name) {
-                            Some(c) => c,
-                            None => return Err(BackendError::ErrColumnDoesNotExist),
-                        };
-
-                        if is_first_row {
-                            columns.push(Column {
-                                name: column_name.clone(),
-                                column_type: table.column_types[c].clone(),
-                            });
-                        }
-
-                        result.push(row[c].clone())
-                    },
-                    _ => {
-                        eprintln!("Skipping non-literal");
-                        continue;
-                    }
+                if let Literal(Symbol(Asterisk)) = itm {
+                    todo!();
                 }
+
+                let (value, column_name, column_type) = table.evaluate(i, &itm)?;
+
+                if is_first_row {
+                    cols.push(Column { column_name, column_type });
+                }
+
+                result.push(value);
             }
             results.push(result);
         }
 
-        Ok(Execute::Results{rows: results, columns})
+        Ok(Execute::Results{rows: results, columns: cols})
     }
 
 }
@@ -447,7 +451,7 @@ mod test {
             rows: vec![
                 vec![true.into()]
             ],
-        }.evaluate(0, e).unwrap();
+        }.evaluate(0, &e).unwrap();
 
         assert_eq!(r, (true.into(), "?column?".to_string(), BoolType));
 
@@ -469,16 +473,12 @@ mod test {
             rows: vec![
                 vec![5.into(), 2.into()]
             ],
-        }.evaluate(0, e).unwrap();
+        }.evaluate(0, &e).unwrap();
 
         assert_eq!(r, (true.into(), "?column?".to_string(), BoolType));
     }
 
     fn eval_table_expr(e: Expression) -> (MemoryCell, String, ColumnType) {
-        Table {
-            columns: vec![],
-            column_types: vec![],
-            rows: vec![],
-        }.evaluate(0, e).unwrap()
+        Table::default().evaluate(0, &e).unwrap()
     }
 }

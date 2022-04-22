@@ -62,7 +62,9 @@ fn run_sql<'a>(
                 if let Results {rows, columns} = backend.execute(&stmt)? {
                     let mut tbl = PrintTable::new();
 
-                    let header: Vec<String> = columns.iter().map(|Column { name, .. }| name.clone()).collect();
+                    let header: Vec<String> = columns.iter()
+                                                     .map(|Column { column_name, .. }| column_name.clone())
+                                                     .collect();
                     tbl.header(&header);
 
                     let results = rows.len();
