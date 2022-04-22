@@ -47,7 +47,7 @@ pub enum Statement {
     },
     InsertStatement {
         table: String,
-        values: Vec<Expression>,
+        values: Vec<Vec<Expression>>,
     },
 }
 
@@ -173,9 +173,22 @@ impl<'a> Parser<'a> {
         self.expect_keyword(Into)?;
         let table = self.expect_identifier()?;
         self.expect_keyword(Values)?;
-        self.expect_symbol(LeftParen)?;
-        let values = self.parse_expressions(vec![Symbol(RightParen)])?;
-        self.expect_symbol(RightParen)?;
+
+        let mut values = Vec::new();
+        loop {
+            self.expect_symbol(LeftParen)?;
+            let value = self.parse_expressions(vec![Symbol(RightParen)])?;
+            self.expect_symbol(RightParen)?;
+
+            values.push(value);
+
+            eprintln!("next_token_before: {:?}", self.peek_next_token()?);
+            if !self.parse_symbol(&Comma)? {
+                eprintln!("next_token_after: {:?}", self.peek_next_token()?);
+                break
+            }
+        }
+
         Ok(Statement::InsertStatement { table, values })
     }
 
@@ -613,9 +626,11 @@ mod test {
                     Statement::InsertStatement {
                         table: "table_name".to_string(),
                         values: vec![
-                            Expression::Literal(PGString("a string".to_string())),
-                            Expression::Literal(Integer(123)),
-                            Expression::Literal(Float(2.3e+12)),
+                            vec![
+                                Expression::Literal(PGString("a string".to_string())),
+                                Expression::Literal(Integer(123)),
+                                Expression::Literal(Float(2.3e+12)),
+                            ]
                         ]
                     }
                 ],
@@ -629,16 +644,46 @@ mod test {
                     Statement::InsertStatement {
                         table: "table_name".to_string(),
                         values: vec![
-                            Expression::Binary {
-                                l: Box::new(Expression::Literal(PGString("some string".to_string()))),
-                                r: Box::new(Expression::Literal(PGString("s".to_string()))),
-                                op: Symbol(Concatenate)
-                            },
-                            Expression::Binary {
-                                l: Box::new(Expression::Literal(Integer(123))),
-                                r: Box::new(Expression::Literal(Float(2.3e12))),
-                                op: Symbol(Plus)
-                            },
+                            vec![
+                                Expression::Binary {
+                                    l: Box::new(Expression::Literal(PGString("some string".to_string()))),
+                                    r: Box::new(Expression::Literal(PGString("s".to_string()))),
+                                    op: Symbol(Concatenate)
+                                },
+                                Expression::Binary {
+                                    l: Box::new(Expression::Literal(Integer(123))),
+                                    r: Box::new(Expression::Literal(Float(2.3e12))),
+                                    op: Symbol(Plus)
+                                },
+                            ]
+                        ]
+                    }
+                ],
+            }
+        );
+
+        assert_eq!(
+            Parser::new("
+                INSERT INTO table_name
+                VALUES ('a string', 123), ('another string', 234), ('a different string', 42);
+            ").parse().unwrap(),
+            Ast {
+                statements: vec![
+                    Statement::InsertStatement {
+                        table: "table_name".to_string(),
+                        values: vec![
+                            vec![
+                                Expression::Literal(PGString("a string".to_string())),
+                                Expression::Literal(Integer(123)),
+                            ],
+                            vec![
+                                Expression::Literal(PGString("another string".to_string())),
+                                Expression::Literal(Integer(234)),
+                            ],
+                            vec![
+                                Expression::Literal(PGString("a different string".to_string())),
+                                Expression::Literal(Integer(42)),
+                            ],
                         ]
                     }
                 ],
@@ -690,9 +735,11 @@ mod test {
                     Statement::InsertStatement {
                         table: "table_name".to_string(),
                         values: vec![
-                            Expression::Literal(Integer(123)),
-                            Expression::Literal(PGString("a string".to_string())),
-                            Expression::Literal(Float(2.3e+12)),
+                            vec![
+                                Expression::Literal(Integer(123)),
+                                Expression::Literal(PGString("a string".to_string())),
+                                Expression::Literal(Float(2.3e+12)),
+                            ]
                         ]
                     },
 

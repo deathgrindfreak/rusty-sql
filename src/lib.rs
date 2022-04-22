@@ -386,7 +386,7 @@ impl InMemoryBackend {
     fn insert(
         &mut self,
         table_name: String,
-        values: Vec<Expression>,
+        values: Vec<Vec<Expression>>,
     ) -> Result<Execute, BackendError> {
         let table = match self.tables.get_mut(&table_name) {
             Some(t) => t,
@@ -394,25 +394,29 @@ impl InMemoryBackend {
         };
 
         if values.is_empty() { return Ok(Execute::Empty); }
-        if values.len() != table.columns.len() {
-            return Err(BackendError::ErrMissingValues);
-        }
 
-        let mut row = Vec::new();
-        for val in values {
-            match val {
-                Literal(_) => {
-                    let (v, _, _) = Table::default().evaluate(0, &val)?;
-                    row.push(v);
-                },
-                _ => {
-                    eprintln!("Skipping non-literal");
-                    continue;
+        for value in values {
+            let mut row = Vec::new();
+
+            if value.len() != table.columns.len() {
+                return Err(BackendError::ErrMissingValues);
+            }
+
+            for val in value {
+                match val {
+                    Literal(_) => {
+                        let (v, _, _) = Table::default().evaluate(0, &val)?;
+                        row.push(v);
+                    },
+                    _ => {
+                        eprintln!("Skipping non-literal");
+                        continue;
+                    }
                 }
             }
-        }
 
-        table.rows.push(row);
+            table.rows.push(row);
+        }
 
         Ok(Execute::Empty)
     }
