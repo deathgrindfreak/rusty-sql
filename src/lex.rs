@@ -289,7 +289,6 @@ fn scientific(input: &str) -> Res<&str, Token> {
         let (int, _, sign, e) = res;
         let s = sign.unwrap_or("+");
         let n = vec![int, "e", s, e].join("");
-        eprintln!("{:?}", n);
         (
             next_input,
             if s == "+" {

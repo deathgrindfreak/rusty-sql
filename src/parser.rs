@@ -182,11 +182,7 @@ impl<'a> Parser<'a> {
 
             values.push(value);
 
-            eprintln!("next_token_before: {:?}", self.peek_next_token()?);
-            if !self.parse_symbol(&Comma)? {
-                eprintln!("next_token_after: {:?}", self.peek_next_token()?);
-                break
-            }
+            if !self.parse_symbol(&Comma)? { break }
         }
 
         Ok(Statement::InsertStatement { table, values })
