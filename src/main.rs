@@ -1,34 +1,20 @@
 extern crate rusty_sql;
 
 use rustyline::error::ReadlineError;
-use rustyline::{Editor};
-use crate::rusty_sql::util::PrintTable;
-use crate::rusty_sql::{
-    InMemoryBackend,
-    Execute::Results,
-    Column,
-    ColumnType::{IntType, TextType, BoolType},
-};
-use crate::rusty_sql::parser::{
-    Parser,
-    Ast,
-    Statement::{
-        CreateStatement,
-        SelectStatement,
-        InsertStatement,
-    },
-};
+use rustyline::Editor;
+use crate::rusty_sql::InMemoryBackend ;
 
 fn main() {
     let mut backend = InMemoryBackend::new();
     let mut rl = Editor::<()>::new();
+
     println!("Welcome to rusty-sql.");
 
     loop {
         match rl.readline("# ") {
             Ok(l) => {
                 rl.add_history_entry(l.as_str());
-                if let Err(err) = run_sql(&l, &mut backend) {
+                if let Err(err) = backend.run(&l) {
                     eprintln!("{}", err);
                 }
             },
@@ -41,58 +27,4 @@ fn main() {
             Err(err) => eprintln!("{:?}", err),
         };
     }
-}
-
-fn run_sql<'a>(
-    line: &'a String,
-    backend: &mut InMemoryBackend,
-) -> Result<(), Box<dyn std::error::Error + 'a>> {
-    let Ast { statements } = Parser::new(&line).parse()?;
-    for stmt in statements {
-        match stmt {
-            CreateStatement { .. } => {
-                backend.execute(&stmt)?;
-                println!("CREATE TABLE");
-            },
-            InsertStatement { .. } => {
-                backend.execute(&stmt)?;
-                println!("INSERT");
-            },
-            SelectStatement { .. } => {
-                if let Results {rows, columns} = backend.execute(&stmt)? {
-                    let mut tbl = PrintTable::new();
-
-                    let header: Vec<String> = columns.iter()
-                                                     .map(|Column { column_name, .. }| column_name.clone())
-                                                     .collect();
-                    tbl.header(&header);
-
-                    let results = rows.len();
-                    for row in rows {
-                        tbl.add(
-                            &row.iter().enumerate().map(|(i, cell)| {
-                                match columns[i].column_type {
-                                    IntType => {
-                                        let r: i32 = cell.clone().into();
-                                        r.to_string()
-                                    },
-                                    TextType => cell.clone().into(),
-                                    BoolType => {
-                                        let r: bool = cell.clone().into();
-                                        if r { "t" } else { "f" }.to_string()
-                                    }
-                                }
-                            }).collect()
-                        );
-                    }
-
-                    println!("");
-                    tbl.print();
-                    println!("({} result{})", results, if results > 1 { "s" } else { "" });
-                }
-            },
-        }
-    }
-
-    Ok(())
 }

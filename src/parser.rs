@@ -13,8 +13,6 @@ use crate::lex::{
     },
 };
 
-use nom::error::VerboseError;
-
 #[derive(Debug, PartialEq)]
 pub struct Ast {
     pub statements: Vec<Statement>
@@ -54,20 +52,20 @@ pub enum Statement {
 }
 
 #[derive(Debug)]
-pub enum ParseError<'a> {
-    LexError(nom::Err<VerboseError<&'a str>>),
+pub enum ParseError {
+    LexError,
     NoMoreTokensError,
     ExpectedSymbolError(SymbolType),
     ExpectedKeywordError(KeywordType),
     ExpectedIdentifierError,
     ExpectedBinaryOperator,
-    ParsingError(&'a str),
+    ParsingError(String),
 }
 
-impl<'a> fmt::Display for ParseError<'a> {
+impl fmt::Display for ParseError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            ParseError::LexError(_err) => write!(f, "Lex error."),
+            ParseError::LexError => write!(f, "Lex error."),
             ParseError::NoMoreTokensError => write!(f, "Expected more tokens."),
             ParseError::ExpectedIdentifierError => write!(f, "Expected identifier."),
             ParseError::ExpectedSymbolError(s) => write!(f, "Expected '{}' symbol", s),
@@ -78,7 +76,7 @@ impl<'a> fmt::Display for ParseError<'a> {
     }
 }
 
-impl<'a> std::error::Error for ParseError<'a> {}
+impl std::error::Error for ParseError {}
 
 impl Token {
     fn binding_power(&self) -> i32 {
@@ -107,10 +105,10 @@ impl<'a> Parser<'a> {
         Parser { cursor: 0, source, tokens: Vec::new()}
     }
 
-    pub fn parse(&mut self) -> Result<Ast, ParseError<'a>> {
+    pub fn parse(&mut self) -> Result<Ast, ParseError> {
         self.tokens = match lex(self.source) {
             Ok((_, t)) => t,
-            Err(r) => return Err(ParseError::LexError(r)),
+            Err(_) => return Err(ParseError::LexError),
         };
 
         let mut statements = Vec::new();
@@ -130,7 +128,7 @@ impl<'a> Parser<'a> {
         Ok(Ast { statements })
     }
 
-    fn parse_statement(&mut self) -> Result<Statement, ParseError<'a>> {
+    fn parse_statement(&mut self) -> Result<Statement, ParseError> {
         self.parse_select_statement()
             .or_else(|err| {
                 match err {
@@ -150,7 +148,7 @@ impl<'a> Parser<'a> {
             })
     }
 
-    fn parse_select_statement(&mut self) -> Result<Statement, ParseError<'a>> {
+    fn parse_select_statement(&mut self) -> Result<Statement, ParseError> {
         self.expect_keyword(Select)?;
 
         let delimiters = vec![Keyword(From), Symbol(SemiColon)];
@@ -170,7 +168,7 @@ impl<'a> Parser<'a> {
         Ok(Statement::SelectStatement { item, from, where_cond })
     }
 
-    fn parse_insert_statement(&mut self) -> Result<Statement, ParseError<'a>> {
+    fn parse_insert_statement(&mut self) -> Result<Statement, ParseError> {
         self.expect_keyword(Insert)?;
         self.expect_keyword(Into)?;
         let table = self.expect_identifier()?;
@@ -181,7 +179,7 @@ impl<'a> Parser<'a> {
         Ok(Statement::InsertStatement { table, values })
     }
 
-    fn parse_create_table_statement(&mut self) -> Result<Statement, ParseError<'a>> {
+    fn parse_create_table_statement(&mut self) -> Result<Statement, ParseError> {
         self.expect_keyword(Create)?;
         self.expect_keyword(Table)?;
         let table_name = self.expect_identifier()?;
@@ -199,7 +197,7 @@ impl<'a> Parser<'a> {
     fn parse_column_definitions(
         &mut self,
         delimiter: Token
-    ) -> Result<Vec<ColumnDefinition>, ParseError<'a>> {
+    ) -> Result<Vec<ColumnDefinition>, ParseError> {
         let mut column_definitions = Vec::new();
         loop {
             if self.peek_next_token()? == &delimiter { break }
@@ -213,7 +211,7 @@ impl<'a> Parser<'a> {
                 Keyword(Int) => Some(Int),
                 Keyword(Text) => Some(Text),
                 _ => None,
-            })?.ok_or(ParseError::ParsingError("Expected data type"))?;
+            })?.ok_or(ParseError::ParsingError("Expected data type".to_string()))?;
 
             column_definitions.push(
                 ColumnDefinition { name: column_name.to_string(), data_type }
@@ -225,7 +223,7 @@ impl<'a> Parser<'a> {
     fn parse_expressions(
         &mut self,
         delimiters: Vec<Token>
-    ) -> Result<Vec<Expression>, ParseError<'a>> {
+    ) -> Result<Vec<Expression>, ParseError> {
         let mut exps = Vec::new();
         loop {
             let token = self.peek_next_token()?;
@@ -251,7 +249,7 @@ impl<'a> Parser<'a> {
         &mut self,
         delimiters: Vec<Token>,
         min_bp: i32,
-    ) -> Result<Expression, ParseError<'a>> {
+    ) -> Result<Expression, ParseError> {
         let mut expr = if self.parse_symbol(&LeftParen)? {
             let delims = delimiters.to_vec()
                                    .iter()
@@ -298,7 +296,7 @@ impl<'a> Parser<'a> {
         Ok(expr)
     }
 
-    fn parse_literal_expression(&mut self) -> Result<Expression, ParseError<'a>> {
+    fn parse_literal_expression(&mut self) -> Result<Expression, ParseError> {
         let expr = self.parse_token(|t| match t {
             Keyword(k) => match k {
                 Int | Text | True | False => Some(t.clone()),
@@ -313,48 +311,48 @@ impl<'a> Parser<'a> {
 
         match expr {
             Some(token) => Ok(Expression::Literal(token)),
-            None => Err(ParseError::ParsingError("Expected expression")),
+            None => Err(ParseError::ParsingError("Expected expression".to_string())),
         }
     }
 
-    fn expect_keyword(&mut self, expected: KeywordType) -> Result<(), ParseError<'a>> {
+    fn expect_keyword(&mut self, expected: KeywordType) -> Result<(), ParseError> {
         self.parse_keyword(&expected).and_then(|matched| {
             if matched { Ok(()) } else { Err(ParseError::ExpectedKeywordError(expected)) }
         })
     }
 
-    fn expect_symbol(&mut self, expected: SymbolType) -> Result<(), ParseError<'a>> {
+    fn expect_symbol(&mut self, expected: SymbolType) -> Result<(), ParseError> {
         self.parse_symbol(&expected).and_then(|matched| {
             if matched { Ok(()) } else { Err(ParseError::ExpectedSymbolError(expected)) }
         })
     }
 
-    fn parse_keyword(&mut self, expected: &KeywordType) -> Result<bool, ParseError<'a>> {
+    fn parse_keyword(&mut self, expected: &KeywordType) -> Result<bool, ParseError> {
         self.parse_token(|t| match t {
             Keyword(s) if s == expected => Some(true),
             _ => None
         }).map(|o| o.unwrap_or(false))
     }
 
-    fn parse_symbol(&mut self, expected: &SymbolType) -> Result<bool, ParseError<'a>> {
+    fn parse_symbol(&mut self, expected: &SymbolType) -> Result<bool, ParseError> {
         self.parse_token(|t| match t {
             Symbol(s) if s == expected => Some(true),
             _ => None
         }).map(|o| o.unwrap_or(false))
     }
 
-    fn expect_identifier(&mut self) -> Result<String, ParseError<'a>> {
+    fn expect_identifier(&mut self) -> Result<String, ParseError> {
         self.parse_identifier()?.ok_or(ParseError::ExpectedIdentifierError)
     }
 
-    fn parse_identifier(&mut self) -> Result<Option<String>, ParseError<'a>> {
+    fn parse_identifier(&mut self) -> Result<Option<String>, ParseError> {
         self.parse_token(|t| match t {
             Identifier(SymbolIdentifier, name) => Some(name.clone()),
             _ => None,
         })
     }
 
-    fn parse_token<F, T>(&mut self, matcher: F) -> Result<Option<T>, ParseError<'a>>
+    fn parse_token<F, T>(&mut self, matcher: F) -> Result<Option<T>, ParseError>
     where F: Fn(&Token) -> Option<T> {
         let token = self.peek_next_token()?;
         Ok(matcher(&token).map(|t| {
@@ -363,7 +361,7 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    fn peek_next_token(&self) -> Result<&Token, ParseError<'a>> {
+    fn peek_next_token(&self) -> Result<&Token, ParseError> {
         self.tokens.get(self.cursor).ok_or(ParseError::NoMoreTokensError)
     }
 }
@@ -741,7 +739,7 @@ mod test {
         );
     }
 
-    fn run_binary_expression<'a>(e: &'a str) -> Result<Expression, ParseError<'a>> {
+    fn run_binary_expression<'a>(e: &'a str) -> Result<Expression, ParseError> {
         let mut def = Parser::new(e);
 
         def.tokens = match lex(def.source) {

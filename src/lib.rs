@@ -6,7 +6,8 @@ use std::fmt;
 use std::collections::HashMap;
 use std::error::Error;
 
-use parser::Expression;
+use util::PrintTable;
+use parser::{Ast, Parser, Expression, ParseError};
 
 use crate::parser::{
     Statement,
@@ -41,7 +42,7 @@ impl Into<ColumnType> for Token {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct Column {
     pub column_type: ColumnType,
     pub column_name: String,
@@ -55,23 +56,31 @@ pub enum BackendError {
     ErrInvalidDatatype,
     ErrMissingValues,
     ErrInvalidOperands,
+    ErrParsingError(ParseError),
 }
 
 impl fmt::Display for BackendError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let err_msg = match self {
-            BackendError::ErrTableDoesNotExist  => "Table does not exist",
-            BackendError::ErrColumnDoesNotExist => "Column does not exist",
-            BackendError::ErrInvalidSelectItem => "Select item is not valid",
-            BackendError::ErrInvalidDatatype => "Invalid datatype",
-            BackendError::ErrMissingValues => "Missing values",
-            BackendError::ErrInvalidOperands => "Invalid operands",
+            BackendError::ErrTableDoesNotExist  => "Table does not exist".to_string(),
+            BackendError::ErrColumnDoesNotExist => "Column does not exist".to_string(),
+            BackendError::ErrInvalidSelectItem => "Select item is not valid".to_string(),
+            BackendError::ErrInvalidDatatype => "Invalid datatype".to_string(),
+            BackendError::ErrMissingValues => "Missing values".to_string(),
+            BackendError::ErrInvalidOperands => "Invalid operands".to_string(),
+            BackendError::ErrParsingError(e) => format!("Parse Error: {}", e),
         };
         write!(f, "{}", err_msg)
     }
 }
 
 impl Error for BackendError {}
+
+impl Into<BackendError> for ParseError {
+    fn into(self) -> BackendError {
+        BackendError::ErrParsingError(self)
+    }
+}
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct MemoryCell(Vec<u8>);
@@ -261,7 +270,7 @@ pub struct InMemoryBackend {
     tables: HashMap<String, Table>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum Execute {
     Empty,
     Results {
@@ -275,7 +284,58 @@ impl InMemoryBackend {
         InMemoryBackend { tables: HashMap::new() }
     }
 
-    pub fn execute(&mut self, stmt: &Statement) -> Result<Execute, BackendError> {
+    pub fn run(&mut self, line: &String) -> Result<(), BackendError> {
+        let Ast { statements } = Parser::new(&line).parse().or_else(|e| Err(e.into()))?;
+        for stmt in statements {
+            match stmt {
+                CreateStatement { .. } => {
+                    self.execute(&stmt)?;
+                    println!("CREATE TABLE");
+                },
+                InsertStatement { .. } => {
+                    self.execute(&stmt)?;
+                    println!("INSERT");
+                },
+                SelectStatement { .. } => {
+                    if let Execute::Results {rows, columns} = self.execute(&stmt)? {
+                        let mut tbl = PrintTable::new();
+
+                        let header: Vec<String> = columns.iter()
+                                                        .map(|Column { column_name, .. }| column_name.clone())
+                                                        .collect();
+                        tbl.header(&header);
+
+                        let results = rows.len();
+                        for row in rows {
+                            tbl.add(
+                                &row.iter().enumerate().map(|(i, cell)| {
+                                    match &columns[i].column_type {
+                                        ColumnType::IntType => {
+                                            let r: i32 = cell.clone().into();
+                                            r.to_string()
+                                        },
+                                        ColumnType::TextType => cell.clone().into(),
+                                        ColumnType::BoolType => {
+                                            let r: bool = cell.clone().into();
+                                            if r { "t" } else { "f" }.to_string()
+                                        }
+                                    }
+                                }).collect()
+                            );
+                        }
+
+                        println!("");
+                        tbl.print();
+                        println!("({} result{})", results, if results > 1 { "s" } else { "" });
+                    }
+                },
+            }
+        }
+
+        Ok(())
+    }
+
+    fn execute(&mut self, stmt: &Statement) -> Result<Execute, BackendError> {
         match stmt {
             CreateStatement { name, cols } => self.create_table(name.to_string(), cols.to_vec()),
             InsertStatement { table, values } => self.insert(table.to_string(), values.to_vec()),
@@ -362,8 +422,6 @@ impl InMemoryBackend {
         let mut cols = Vec::new();
 
         for i in 0..table.rows.len() {
-            let is_first_row = i == 0;
-
             if let Some(ref expr) = where_cond {
                 let (val, _, _) = table.evaluate(i, &expr)?;
                 let b: bool = val.into();
@@ -378,10 +436,7 @@ impl InMemoryBackend {
 
                 let (value, column_name, column_type) = table.evaluate(i, &itm)?;
 
-                if is_first_row {
-                    cols.push(Column { column_name, column_type });
-                }
-
+                if results.is_empty() { cols.push(Column { column_name, column_type }); }
                 result.push(value);
             }
             results.push(result);
@@ -401,6 +456,89 @@ mod test {
         Token::{Integer, Symbol},
         SymbolType::Plus
     };
+
+    #[test]
+    fn test_backend() {
+        let mut b = InMemoryBackend::new();
+
+        let r = run_stmt(&mut b, "CREATE TABLE users (name TEXT, age INT);");
+        assert_eq!(r, Execute::Empty);
+
+        let r = run_stmt(&mut b, "INSERT INTO users VALUES ('Stephen', 16);");
+        assert_eq!(r, Execute::Empty);
+
+        let r = run_stmt(&mut b, "SELECT name, age FROM users;");
+        assert_eq!(
+            r,
+            Execute::Results {
+                columns: vec![
+                    Column {
+                        column_type: TextType,
+                        column_name: "name".to_string()
+                    },
+                    Column {
+                        column_type: IntType,
+                        column_name: "age".to_string()
+                    }
+                ],
+                rows: vec![
+                    vec![
+                        "Stephen".to_string().into(),
+                        16i32.into()
+                    ]
+                ]
+            }
+        );
+
+        let r = run_stmt(&mut b, "INSERT INTO users VALUES ('Adrienne', 23);");
+        assert_eq!(r, Execute::Empty);
+
+        let r = run_stmt(&mut b, "SELECT age + 2, name FROM users WHERE age = 23;");
+        assert_eq!(
+            r,
+            Execute::Results {
+                columns: vec![
+                    Column {
+                        column_type: IntType,
+                        column_name: "age".to_string()
+                    },
+                    Column {
+                        column_type: TextType,
+                        column_name: "name".to_string()
+                    },
+                ],
+                rows: vec![
+                    vec![
+                        25i32.into(),
+                        "Adrienne".to_string().into(),
+                    ]
+                ]
+            }
+        );
+
+        let r = run_stmt(&mut b, "SELECT name FROM users;");
+        assert_eq!(
+            r,
+            Execute::Results {
+                columns: vec![
+                    Column {
+                        column_type: TextType,
+                        column_name: "name".to_string()
+                    }
+                ],
+                rows: vec![
+                    vec!["Stephen".to_string().into()],
+                    vec!["Adrienne".to_string().into()]
+                ]
+            }
+        );
+
+        fn run_stmt(b: &mut InMemoryBackend, s: &str) -> Execute {
+            b.execute(
+                &Parser::new(&s.to_string()).parse().unwrap().statements[0]
+            ).unwrap()
+        }
+    }
 
     #[test]
     fn test_table_evaluation() {
