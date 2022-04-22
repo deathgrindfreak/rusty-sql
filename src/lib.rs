@@ -171,14 +171,19 @@ impl Table {
     ) -> Result<(MemoryCell, ColumnName, ColumnType), BackendError> {
         match exp {
             Literal(e) => {
-                if let Identifier(SymbolIdentifier, id) = e.clone() {
-                    let (c, _) = self.columns.iter()
-                                             .enumerate()
-                                             .find(|(_, col)| **col == id)
-                                             .ok_or(BackendError::ErrColumnDoesNotExist)?;
-                    Ok((self.rows[row_index][c].clone(), ColumnName::Name(id), self.column_types[c].clone()))
-                } else {
-                    Ok((e.clone().into(), ColumnName::DefaultName, e.clone().into()))
+                match e {
+                    Identifier(SymbolIdentifier, id) => {
+                        let (c, _) = self.columns.iter()
+                                                .enumerate()
+                                                .find(|(_, col)| *col == id)
+                                                .ok_or(BackendError::ErrColumnDoesNotExist)?;
+                        Ok((
+                            self.rows[row_index][c].clone(),
+                            ColumnName::Name(id.to_string()),
+                            self.column_types[c].clone()
+                        ))
+                    },
+                    _ => Ok((e.clone().into(), ColumnName::DefaultName, e.clone().into()))
                 }
             },
             Binary { l, r, op } => {
@@ -450,14 +455,19 @@ impl InMemoryBackend {
                 if !b { continue }
             }
 
-            let mut result = Vec::new();
-            for itm in &item {
-                if let Literal(Symbol(Asterisk)) = itm {
-                    todo!();
+            let expanded_items: Vec<Expression> = item.iter().flat_map(|i| {
+                if let Literal(Symbol(Asterisk)) = i {
+                    table.columns.iter().map(|c| {
+                        Literal(Identifier(SymbolIdentifier, c.to_string()))
+                    }).collect()
+                } else {
+                    vec![i.clone()]
                 }
+            }).collect();
 
+            let mut result = Vec::new();
+            for itm in expanded_items {
                 let (value, column_name, column_type) = table.evaluate(i, &itm)?;
-
                 if results.is_empty() { cols.push(Column { column_name, column_type }); }
                 result.push(value);
             }
@@ -552,6 +562,39 @@ mod test {
                 rows: vec![
                     vec!["Stephen".to_string().into()],
                     vec!["Adrienne".to_string().into()]
+                ]
+            }
+        );
+
+        let r = run_stmt(&mut b, "SELECT *, name FROM users;");
+        assert_eq!(
+            r,
+            Execute::Results {
+                columns: vec![
+                    Column {
+                        column_type: TextType,
+                        column_name: Name("name".to_string())
+                    },
+                    Column {
+                        column_type: IntType,
+                        column_name: Name("age".to_string())
+                    },
+                    Column {
+                        column_type: TextType,
+                        column_name: Name("name".to_string())
+                    },
+                ],
+                rows: vec![
+                    vec![
+                        "Stephen".to_string().into(),
+                        16i32.into(),
+                        "Stephen".to_string().into(),
+                    ],
+                    vec![
+                        "Adrienne".to_string().into(),
+                        23i32.into(),
+                        "Adrienne".to_string().into(),
+                    ]
                 ]
             }
         );
