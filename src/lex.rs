@@ -454,6 +454,7 @@ FROM test_table_name;"),
         assert_eq!(identifier("SELECT FROM"), Ok((" FROM", Keyword(Select))));
         assert_eq!(identifier("TaBlE"), Ok(("", Keyword(Table))));
         assert_eq!(identifier("From"), Ok(("", Keyword(From))));
+        assert_eq!(identifier("Where"), Ok(("", Keyword(Where))));
         assert_eq!(identifier("aS"), Ok(("", Keyword(As))));
         assert_eq!(identifier("Create"), Ok(("", Keyword(Create))));
         assert_eq!(identifier("INSERT"), Ok(("", Keyword(Insert))));

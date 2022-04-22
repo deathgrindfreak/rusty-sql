@@ -401,8 +401,9 @@ impl InMemoryBackend {
         let mut row = Vec::new();
         for val in values {
             match val {
-                Literal(e) => {
-                    row.push(e.clone().into());
+                Literal(_) => {
+                    let (v, _, _) = Table::default().evaluate(0, &val)?;
+                    row.push(v);
                 },
                 _ => {
                     eprintln!("Skipping non-literal");
