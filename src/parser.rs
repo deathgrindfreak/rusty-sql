@@ -9,7 +9,7 @@ use crate::lex::{
     IdentifierType::Symbol as SymbolIdentifier,
     KeywordType::{
         Int, Text, Create, Table, Select, From, Where,
-        And, Or, True, False, Insert, Into, Values
+        And, Or, True, False, Insert, Into, Values, As
     },
 };
 
@@ -279,7 +279,7 @@ impl<'a> Parser<'a> {
 
             let op = self.parse_token(|t| match t {
                 Keyword(k) => match k {
-                    And | Or => Some(t.clone()),
+                    And | Or | As => Some(t.clone()),
                     _ => None
                 },
                 Symbol(s) => match s {

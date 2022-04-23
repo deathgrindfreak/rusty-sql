@@ -1,286 +1,29 @@
 pub mod lex;
 pub mod parser;
 pub mod util;
+pub mod table;
+pub mod error;
 
-use std::fmt;
 use std::collections::HashMap;
-use std::error::Error;
 
 use util::PrintTable;
-use parser::{Ast, Parser, Expression, ParseError};
+use parser::{Ast, Parser, Expression};
+use table::{Table, Column, ColumnType, MemoryCell};
+use error::BackendError;
 
 use crate::parser::{
     Statement,
     Statement::{CreateStatement, InsertStatement, SelectStatement},
     ColumnDefinition,
-    Expression::{Literal, Binary},
+    Expression::Literal,
 };
 
 use crate::lex::{
-    KeywordType::{Int, Text, True, False, And, Or},
-    SymbolType::{Equals, NotEquals, Concatenate, Plus, Asterisk},
-    Token,
-    Token::{Integer, PGString, Identifier, Keyword, Symbol},
+    KeywordType::{Int, Text},
+    SymbolType::Asterisk,
+    Token::{Identifier, Symbol},
     IdentifierType::Symbol as SymbolIdentifier,
 };
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ColumnType {
-    TextType,
-    IntType,
-    BoolType,
-}
-
-impl Into<ColumnType> for Token {
-    fn into(self) -> ColumnType {
-        match self {
-            PGString(_) => ColumnType::TextType,
-            Integer(_) => ColumnType::IntType,
-            Keyword(True) | Keyword(False) => ColumnType::BoolType,
-            _ => unimplemented!("Not a column type")
-        }
-    }
-}
-
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ColumnName {
-    DefaultName,
-    Name(String),
-}
-
-impl Into<String> for ColumnName {
-    fn into(self) -> String {
-        match self {
-            ColumnName::DefaultName => "?column?".to_string(),
-            ColumnName::Name(s) => s,
-        }
-    }
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub struct Column {
-    pub column_type: ColumnType,
-    pub column_name: ColumnName,
-}
-
-#[derive(Debug)]
-pub enum BackendError {
-    ErrTableDoesNotExist,
-    ErrColumnDoesNotExist,
-    ErrInvalidSelectItem,
-    ErrInvalidDatatype,
-    ErrMissingValues,
-    ErrInvalidOperands,
-    ErrParsingError(ParseError),
-}
-
-impl fmt::Display for BackendError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let err_msg = match self {
-            BackendError::ErrTableDoesNotExist  => "Table does not exist".to_string(),
-            BackendError::ErrColumnDoesNotExist => "Column does not exist".to_string(),
-            BackendError::ErrInvalidSelectItem => "Select item is not valid".to_string(),
-            BackendError::ErrInvalidDatatype => "Invalid datatype".to_string(),
-            BackendError::ErrMissingValues => "Missing values".to_string(),
-            BackendError::ErrInvalidOperands => "Invalid operands".to_string(),
-            BackendError::ErrParsingError(e) => format!("Parse Error: {}", e),
-        };
-        write!(f, "{}", err_msg)
-    }
-}
-
-impl Error for BackendError {}
-
-impl Into<BackendError> for ParseError {
-    fn into(self) -> BackendError {
-        BackendError::ErrParsingError(self)
-    }
-}
-
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub struct MemoryCell(Vec<u8>);
-
-impl From<MemoryCell> for String {
-    fn from(MemoryCell(mc): MemoryCell) -> String {
-        String::from_utf8_lossy(&mc).to_string()
-    }
-}
-
-impl Into<MemoryCell> for String {
-    fn into(self) -> MemoryCell {
-        MemoryCell(self.as_bytes().to_vec())
-    }
-}
-
-impl From<MemoryCell> for i32 {
-    fn from(MemoryCell(mc): MemoryCell) -> Self {
-        i32::from_le_bytes(
-            mc.try_into().unwrap_or_else(|v: Vec<u8>| {
-                panic!("Expected Vec of length 4 but found length {}", v.len())
-            })
-        )
-    }
-}
-
-impl Into<MemoryCell> for i32 {
-    fn into(self) -> MemoryCell {
-        MemoryCell(self.to_le_bytes().to_vec())
-    }
-}
-
-impl From<MemoryCell> for bool {
-    fn from(MemoryCell(mc): MemoryCell) -> Self {
-        mc.len() == 1
-    }
-}
-
-impl Into<MemoryCell> for bool {
-    fn into(self) -> MemoryCell {
-        MemoryCell(if self { vec![1] } else { vec![] })
-    }
-}
-
-impl From<Token> for MemoryCell {
-    fn from(token: Token) -> MemoryCell {
-        match token {
-            Integer(i) => i.clone().into(),
-            PGString(s) => s.clone().into(),
-            Keyword(k) => match k {
-                True => MemoryCell(vec![1]),
-                False => MemoryCell(vec![]),
-                _ => unimplemented!("Not a memory cell type"),
-            }
-            _ => unimplemented!("Not a memory cell type"),
-        }
-    }
-}
-
-#[derive(Debug, Default)]
-pub struct Table {
-    columns: Vec<String>,
-    column_types: Vec<ColumnType>,
-    rows: Vec<Vec<MemoryCell>>,
-}
-
-impl Table {
-    pub fn evaluate(
-        &self,
-        row_index: usize,
-        exp: &Expression
-    ) -> Result<(MemoryCell, ColumnName, ColumnType), BackendError> {
-        match exp {
-            Literal(e) => {
-                match e {
-                    Identifier(SymbolIdentifier, id) => {
-                        let (c, _) = self.columns.iter()
-                                                .enumerate()
-                                                .find(|(_, col)| *col == id)
-                                                .ok_or(BackendError::ErrColumnDoesNotExist)?;
-                        Ok((
-                            self.rows[row_index][c].clone(),
-                            ColumnName::Name(id.to_string()),
-                            self.column_types[c].clone()
-                        ))
-                    },
-                    _ => Ok((e.clone().into(), ColumnName::DefaultName, e.clone().into()))
-                }
-            },
-            Binary { l, r, op } => {
-                let (l_cell, _, l_type) = self.evaluate(row_index, &l.clone())?;
-                let (r_cell, _, r_type) = self.evaluate(row_index, &r.clone())?;
-                let true_cell: MemoryCell = Keyword(True).into();
-                let false_cell: MemoryCell = Keyword(False).into();
-
-                match op {
-                    Symbol(s) => match s {
-                        Equals => {
-                            let eq = l_cell == r_cell;
-                            Ok((
-                                match (l_type, r_type) {
-                                    (ColumnType::TextType, ColumnType::TextType)
-                                        | (ColumnType::IntType, ColumnType::IntType)
-                                        | (ColumnType::BoolType, ColumnType::BoolType)
-                                        if eq => true_cell,
-                                    _ => false_cell
-                                },
-                                ColumnName::DefaultName,
-                                ColumnType::BoolType
-                            ))
-                        },
-                        NotEquals => {
-                            Ok((
-                                if l_type != r_type || l != r {
-                                    true_cell
-                                } else {
-                                    false_cell
-                                },
-                                ColumnName::DefaultName,
-                                ColumnType::BoolType
-                            ))
-                        },
-                        Concatenate => {
-                            if l_type != ColumnType::TextType || r_type != ColumnType::TextType {
-                                return Err(BackendError::ErrInvalidOperands);
-                            }
-
-                            let mut l_string: String = l_cell.into();
-                            let r_string: String = r_cell.into();
-                            l_string.push_str(r_string.as_str());
-
-                            Ok((l_string.into(), ColumnName::DefaultName, ColumnType::TextType))
-                        },
-                        Plus => {
-                            if l_type != ColumnType::IntType || r_type != ColumnType::IntType {
-                                return Err(BackendError::ErrInvalidOperands);
-                            }
-
-                            let l_int: i32 = l_cell.into();
-                            let r_int: i32 = r_cell.into();
-
-                            Ok(((l_int + r_int).into(), ColumnName::DefaultName, ColumnType::IntType))
-                        },
-                        _ => todo!(),
-                    },
-                    Keyword(k) => {
-                        match k {
-                            And => {
-                                if l_type != ColumnType::BoolType || r_type != ColumnType::BoolType {
-                                    return Err(BackendError::ErrInvalidOperands);
-                                }
-
-                                let l_b: bool = l_cell.into();
-                                let r_b: bool = r_cell.into();
-
-                                Ok((
-                                    if l_b && r_b { true_cell } else { false_cell },
-                                    ColumnName::DefaultName,
-                                    ColumnType::BoolType
-                                ))
-                            },
-                            Or => {
-                                if l_type != ColumnType::BoolType || r_type != ColumnType::BoolType {
-                                    return Err(BackendError::ErrInvalidOperands);
-                                }
-
-                                let l_b: bool = l_cell.into();
-                                let r_b: bool = r_cell.into();
-
-                                Ok((
-                                    if l_b || r_b { true_cell } else { false_cell },
-                                    ColumnName::DefaultName,
-                                    ColumnType::BoolType
-                                ))
-                            },
-                            _ => todo!()
-                        }
-                    },
-                    _ => todo!()
-                }
-            }
-        }
-    }
-}
 
 trait Backend {
     fn execute(&mut self, stmt: Statement) -> Result<(), BackendError>;
@@ -482,12 +225,10 @@ impl InMemoryBackend {
 #[cfg(test)]
 mod test {
     use super::*;
-    use super::ColumnType::{IntType, TextType, BoolType};
-    use super::ColumnName::{Name, DefaultName};
-    use crate::parser::Expression::{Binary, Literal};
-    use crate::lex::{
-        Token::{Integer, Symbol},
-        SymbolType::Plus
+
+    use crate::table::{
+        ColumnType::{TextType, IntType},
+        ColumnName::{DefaultName, Name},
     };
 
     #[test]
@@ -604,85 +345,5 @@ mod test {
                 &Parser::new(&s.to_string()).parse().unwrap().statements[0]
             ).unwrap()
         }
-    }
-
-    #[test]
-    fn test_table_evaluation() {
-        let r = eval_table_expr(Binary {
-            l: Box::new(Literal(Integer(1))),
-            r: Box::new(Literal(Integer(1))),
-            op: Symbol(Plus),
-        });
-
-        assert_eq!(r, (2i32.into(), ColumnName::DefaultName, IntType));
-
-        let r = eval_table_expr(Binary {
-            l: Box::new(Literal(PGString("one".to_string()))),
-            r: Box::new(Literal(PGString("two".to_string()))),
-            op: Symbol(Concatenate),
-        });
-
-        assert_eq!(r, ("onetwo".to_string().into(), ColumnName::DefaultName, TextType));
-
-        let r = eval_table_expr(Binary {
-            l: Box::new(Literal(Keyword(True))),
-            r: Box::new(Literal(Keyword(False))),
-            op: Keyword(Or),
-        });
-
-        assert_eq!(r, (true.into(), ColumnName::DefaultName, BoolType));
-
-        let r = eval_table_expr(Binary {
-            l: Box::new(Literal(Keyword(False))),
-            r: Box::new(Literal(Keyword(True))),
-            op: Keyword(And),
-        });
-
-        assert_eq!(r, (false.into(), ColumnName::DefaultName, BoolType));
-    }
-
-    #[test]
-    fn test_row_evaluation() {
-        let e = Binary {
-            l: Box::new(Literal(Identifier(SymbolIdentifier, "column1".to_string()))),
-            r: Box::new(Literal(Keyword(True))),
-            op: Symbol(Equals),
-        };
-
-        let r = Table {
-            columns: vec!["column1".to_string()],
-            column_types: vec![BoolType],
-            rows: vec![
-                vec![true.into()]
-            ],
-        }.evaluate(0, &e).unwrap();
-
-        assert_eq!(r, (true.into(), ColumnName::DefaultName, BoolType));
-
-        let e = Binary {
-            l: Box::new(Literal(Identifier(SymbolIdentifier, "column1".to_string()))),
-            r: Box::new(
-                Binary {
-                    l: Box::new(Literal(Identifier(SymbolIdentifier, "column2".to_string()))),
-                    r: Box::new(Literal(Integer(3))),
-                    op: Symbol(Plus),
-                }
-            ),
-            op: Symbol(Equals),
-        };
-
-        let r = Table {
-            columns: vec!["column1".to_string(), "column2".to_string()],
-            column_types: vec![IntType, IntType],
-            rows: vec![
-                vec![5.into(), 2.into()]
-            ],
-        }.evaluate(0, &e).unwrap();
-
-        assert_eq!(r, (true.into(), ColumnName::DefaultName, BoolType));
-    }
-
-    fn eval_table_expr(e: Expression) -> (MemoryCell, ColumnName, ColumnType) {
-        Table::default().evaluate(0, &e).unwrap()
     }
 }
