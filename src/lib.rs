@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 use util::PrintTable;
 use parser::{Ast, Parser, Expression};
-use table::{Table, Column, ColumnType, MemoryCell};
+use table::{Table, Column, ColumnType, MemoryCell, Cell};
 use error::BackendError;
 
 use crate::parser::{
@@ -89,7 +89,6 @@ impl InMemoryBackend {
                             );
                         }
 
-                        println!("");
                         tbl.print();
                         println!("({} result{})", results, if results > 1 { "s" } else { "" });
                     }
@@ -153,8 +152,13 @@ impl InMemoryBackend {
             for val in value {
                 match val {
                     Literal(_) => {
-                        let (v, _, _) = Table::default().evaluate(0, &val)?;
-                        row.push(v);
+                        row.push(
+                            match Table::default().evaluate(0, &val)? {
+                                Cell::TableCell(v, _, _) => v,
+                                Cell::ExprCell(v, _) => v,
+                                Cell::Alias(_) => return Err(BackendError::ErrInvalidOperands),
+                            }
+                        );
                     },
                     _ => {
                         eprintln!("Skipping non-literal");
@@ -193,7 +197,11 @@ impl InMemoryBackend {
 
         for i in 0..table.rows.len() {
             if let Some(ref expr) = where_cond {
-                let (val, _, _) = table.evaluate(i, &expr)?;
+                let val = match table.evaluate(i, &expr)? {
+                    Cell::TableCell(v, _, _) => v,
+                    Cell::ExprCell(v, _) => v,
+                    Cell::Alias(_) => return Err(BackendError::ErrInvalidOperands),
+                };
                 let b: bool = val.into();
                 if !b { continue }
             }
@@ -210,7 +218,11 @@ impl InMemoryBackend {
 
             let mut result = Vec::new();
             for itm in expanded_items {
-                let (value, column_name, column_type) = table.evaluate(i, &itm)?;
+                let (value, column_name, column_type) = match table.evaluate(i, &itm)? {
+                    Cell::TableCell(v, n, t) => (v, n, t),
+                    Cell::ExprCell(v, t) => (v, "?column?".to_string(), t),
+                    Cell::Alias(_) => return Err(BackendError::ErrInvalidOperands)
+                };
                 if results.is_empty() { cols.push(Column { column_name, column_type }); }
                 result.push(value);
             }
@@ -225,11 +237,7 @@ impl InMemoryBackend {
 #[cfg(test)]
 mod test {
     use super::*;
-
-    use crate::table::{
-        ColumnType::{TextType, IntType},
-        ColumnName::{DefaultName, Name},
-    };
+    use crate::table::ColumnType::{TextType, IntType} ;
 
     #[test]
     fn test_backend() {
@@ -248,11 +256,11 @@ mod test {
                 columns: vec![
                     Column {
                         column_type: TextType,
-                        column_name: Name("name".to_string())
+                        column_name: "name".to_string()
                     },
                     Column {
                         column_type: IntType,
-                        column_name: Name("age".to_string())
+                        column_name: "age".to_string()
                     }
                 ],
                 rows: vec![
@@ -274,11 +282,11 @@ mod test {
                 columns: vec![
                     Column {
                         column_type: IntType,
-                        column_name: DefaultName
+                        column_name: "?column?".to_string(),
                     },
                     Column {
                         column_type: TextType,
-                        column_name: Name("name".to_string())
+                        column_name: "name".to_string()
                     },
                 ],
                 rows: vec![
@@ -290,6 +298,46 @@ mod test {
             }
         );
 
+        let r = run_stmt(&mut b, "SELECT age + 2 as \"new_age\", name FROM users WHERE age = 23;");
+        assert_eq!(
+            r,
+            Execute::Results {
+                columns: vec![
+                    Column {
+                        column_type: IntType,
+                        column_name: "new_age".to_string(),
+                    },
+                    Column {
+                        column_type: TextType,
+                        column_name: "name".to_string()
+                    },
+                ],
+                rows: vec![
+                    vec![
+                        25i32.into(),
+                        "Adrienne".to_string().into(),
+                    ]
+                ]
+            }
+        );
+
+        let r = run_stmt(&mut b, "SELECT name || ' ' ||  name as double_name FROM users;");
+        assert_eq!(
+            r,
+            Execute::Results {
+                columns: vec![
+                    Column {
+                        column_type: TextType,
+                        column_name: "double_name".to_string()
+                    },
+                ],
+                rows: vec![
+                    vec!["Stephen Stephen".to_string().into(),],
+                    vec!["Adrienne Adrienne".to_string().into(),],
+                ]
+            }
+        );
+
         let r = run_stmt(&mut b, "SELECT name FROM users;");
         assert_eq!(
             r,
@@ -297,7 +345,7 @@ mod test {
                 columns: vec![
                     Column {
                         column_type: TextType,
-                        column_name: Name("name".to_string())
+                        column_name: "name".to_string()
                     }
                 ],
                 rows: vec![
@@ -314,15 +362,15 @@ mod test {
                 columns: vec![
                     Column {
                         column_type: TextType,
-                        column_name: Name("name".to_string())
+                        column_name: "name".to_string()
                     },
                     Column {
                         column_type: IntType,
-                        column_name: Name("age".to_string())
+                        column_name: "age".to_string()
                     },
                     Column {
                         column_type: TextType,
-                        column_name: Name("name".to_string())
+                        column_name: "name".to_string()
                     },
                 ],
                 rows: vec![

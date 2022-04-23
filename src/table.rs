@@ -10,7 +10,7 @@ use crate::lex::{
     SymbolType::{Equals, NotEquals, Concatenate, Plus},
     Token,
     Token::{Integer, PGString, Identifier, Keyword, Symbol},
-    IdentifierType::Symbol as SymbolIdentifier,
+    IdentifierType::{Symbol as SymbolIdentifier, DoubleQuote},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,27 +31,10 @@ impl Into<ColumnType> for Token {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ColumnName {
-    DefaultName,
-    Name(String),
-    Alias(String, String),
-}
-
-impl Into<String> for ColumnName {
-    fn into(self) -> String {
-        match self {
-            ColumnName::DefaultName => "?column?".to_string(),
-            ColumnName::Name(s) => s,
-            ColumnName::Alias(_, s) => s,
-        }
-    }
-}
-
 #[derive(Debug, PartialEq, Eq)]
 pub struct Column {
     pub column_type: ColumnType,
-    pub column_name: ColumnName,
+    pub column_name: String,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -119,40 +102,63 @@ pub struct Table {
     pub rows: Vec<Vec<MemoryCell>>,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum Cell {
+    TableCell(MemoryCell, String, ColumnType),
+    ExprCell(MemoryCell, ColumnType),
+    Alias(String)
+}
+
 impl Table {
-    pub fn evaluate(
-        &self,
-        row_index: usize,
-        exp: &Expression
-    ) -> Result<(MemoryCell, ColumnName, ColumnType), BackendError> {
+    pub fn evaluate(&self, row_index: usize, exp: &Expression) -> Result<Cell, BackendError> {
         match exp {
             Literal(e) => {
                 match e {
+                    Identifier(DoubleQuote, id) => Ok(Cell::Alias(id.to_string())),
                     Identifier(SymbolIdentifier, id) => {
-                        let (c, _) = self.columns.iter()
-                                                .enumerate()
-                                                .find(|(_, col)| *col == id)
-                                                .ok_or(BackendError::ErrColumnDoesNotExist)?;
-                        Ok((
-                            self.rows[row_index][c].clone(),
-                            ColumnName::Name(id.to_string()),
-                            self.column_types[c].clone()
-                        ))
+                        Ok(
+                            match self.columns.iter().enumerate().find(|(_, col)| *col == id) {
+                                Some((c, _)) => Cell::TableCell(
+                                    self.rows[row_index][c].clone(),
+                                    id.to_string(),
+                                    self.column_types[c].clone()
+                                ),
+                                None => Cell::Alias(id.to_string())
+                            }
+                        )
                     },
-                    _ => Ok((e.clone().into(), ColumnName::DefaultName, e.clone().into()))
+                    _ => Ok(Cell::ExprCell(e.clone().into(), e.clone().into()))
                 }
             },
             Binary { l, r, op } => {
-                let (l_cell, _, l_type) = self.evaluate(row_index, &l.clone())?;
-                let (r_cell, r_name, r_type) = self.evaluate(row_index, &r.clone())?;
+                let l_c = self.evaluate(row_index, &l.clone())?;
+                let r_c = self.evaluate(row_index, &r.clone())?;
+
                 let true_cell: MemoryCell = Keyword(True).into();
                 let false_cell: MemoryCell = Keyword(False).into();
+
+                // Alias type should never be in the left operand
+                let (l_cell, l_type) = match l_c {
+                    Cell::TableCell(ref mc, _, ref mt) => (mc.clone(), mt.clone()),
+                    Cell::ExprCell(ref mc, ref mt) => (mc.clone(), mt.clone()),
+                    Cell::Alias(_) => return Err(BackendError::ErrInvalidOperands),
+                };
+
+                let (r_cell, r_type) = match r_c {
+                    Cell::TableCell(mc, _, mt) => (mc, mt),
+                    Cell::ExprCell(mc, mt) => (mc, mt),
+                    Cell::Alias(alias_name) => return if let Keyword(As) = op {
+                        Ok(Cell::TableCell(l_cell.clone().into(), alias_name, l_type.clone()))
+                    } else {
+                        Err(BackendError::ErrInvalidOperands)
+                    }
+                };
 
                 match op {
                     Symbol(s) => match s {
                         Equals => {
                             let eq = l_cell == r_cell;
-                            Ok((
+                            Ok(Cell::ExprCell(
                                 match (l_type, r_type) {
                                     (ColumnType::TextType, ColumnType::TextType)
                                         | (ColumnType::IntType, ColumnType::IntType)
@@ -160,18 +166,16 @@ impl Table {
                                         if eq => true_cell,
                                     _ => false_cell
                                 },
-                                ColumnName::DefaultName,
                                 ColumnType::BoolType
                             ))
                         },
                         NotEquals => {
-                            Ok((
+                            Ok(Cell::ExprCell(
                                 if l_type != r_type || l != r {
                                     true_cell
                                 } else {
                                     false_cell
                                 },
-                                ColumnName::DefaultName,
                                 ColumnType::BoolType
                             ))
                         },
@@ -184,7 +188,7 @@ impl Table {
                             let r_string: String = r_cell.into();
                             l_string.push_str(r_string.as_str());
 
-                            Ok((l_string.into(), ColumnName::DefaultName, ColumnType::TextType))
+                            Ok(Cell::ExprCell(l_string.into(), ColumnType::TextType))
                         },
                         Plus => {
                             if l_type != ColumnType::IntType || r_type != ColumnType::IntType {
@@ -194,19 +198,12 @@ impl Table {
                             let l_int: i32 = l_cell.into();
                             let r_int: i32 = r_cell.into();
 
-                            Ok(((l_int + r_int).into(), ColumnName::DefaultName, ColumnType::IntType))
+                            Ok(Cell::ExprCell((l_int + r_int).into(), ColumnType::IntType))
                         },
                         _ => todo!(),
                     },
                     Keyword(k) => {
                         match k {
-                            As => {
-                                if let ColumnName::Name(name) = r_name {
-                                    Ok((l_cell, ColumnName::Alias(r_cell.into(), name), l_type))
-                                } else {
-                                    Err(BackendError::ErrInvalidDatatype)
-                                }
-                            },
                             And => {
                                 if l_type != ColumnType::BoolType || r_type != ColumnType::BoolType {
                                     return Err(BackendError::ErrInvalidOperands);
@@ -215,9 +212,8 @@ impl Table {
                                 let l_b: bool = l_cell.into();
                                 let r_b: bool = r_cell.into();
 
-                                Ok((
+                                Ok(Cell::ExprCell(
                                     if l_b && r_b { true_cell } else { false_cell },
-                                    ColumnName::DefaultName,
                                     ColumnType::BoolType
                                 ))
                             },
@@ -229,9 +225,8 @@ impl Table {
                                 let l_b: bool = l_cell.into();
                                 let r_b: bool = r_cell.into();
 
-                                Ok((
+                                Ok(Cell::ExprCell(
                                     if l_b || r_b { true_cell } else { false_cell },
-                                    ColumnName::DefaultName,
                                     ColumnType::BoolType
                                 ))
                             },
@@ -264,7 +259,7 @@ mod test {
             op: Symbol(Plus),
         });
 
-        assert_eq!(r, (2i32.into(), ColumnName::DefaultName, IntType));
+        assert_eq!(r, Cell::ExprCell(2i32.into(), IntType));
 
         let r = eval_table_expr(Binary {
             l: Box::new(Literal(PGString("one".to_string()))),
@@ -272,7 +267,7 @@ mod test {
             op: Symbol(Concatenate),
         });
 
-        assert_eq!(r, ("onetwo".to_string().into(), ColumnName::DefaultName, TextType));
+        assert_eq!(r, Cell::ExprCell("onetwo".to_string().into(), TextType));
 
         let r = eval_table_expr(Binary {
             l: Box::new(Literal(Keyword(True))),
@@ -280,7 +275,7 @@ mod test {
             op: Keyword(Or),
         });
 
-        assert_eq!(r, (true.into(), ColumnName::DefaultName, BoolType));
+        assert_eq!(r, Cell::ExprCell(true.into(), BoolType));
 
         let r = eval_table_expr(Binary {
             l: Box::new(Literal(Keyword(False))),
@@ -288,7 +283,7 @@ mod test {
             op: Keyword(And),
         });
 
-        assert_eq!(r, (false.into(), ColumnName::DefaultName, BoolType));
+        assert_eq!(r, Cell::ExprCell(false.into(), BoolType));
     }
 
     #[test]
@@ -307,7 +302,7 @@ mod test {
             ],
         }.evaluate(0, &e).unwrap();
 
-        assert_eq!(r, (true.into(), ColumnName::DefaultName, BoolType));
+        assert_eq!(r, Cell::ExprCell(true.into(), BoolType));
 
         let e = Binary {
             l: Box::new(Literal(Identifier(SymbolIdentifier, "column1".to_string()))),
@@ -329,10 +324,10 @@ mod test {
             ],
         }.evaluate(0, &e).unwrap();
 
-        assert_eq!(r, (true.into(), ColumnName::DefaultName, BoolType));
+        assert_eq!(r, Cell::ExprCell(true.into(), BoolType));
     }
 
-    fn eval_table_expr(e: Expression) -> (MemoryCell, ColumnName, ColumnType) {
+    fn eval_table_expr(e: Expression) -> Cell {
         Table::default().evaluate(0, &e).unwrap()
     }
 }

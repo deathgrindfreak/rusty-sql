@@ -794,7 +794,6 @@ mod test {
     }
 
     #[test]
-    #[ignore]
     fn test_select_with_alias() {
         let def = Parser::new("SELECT column1 as \"column_one\" FROM table_name;").parse().unwrap();
         assert_eq!(
@@ -803,14 +802,16 @@ mod test {
                 statements: vec![
                     Statement::SelectStatement {
                         item: vec![
-                            Expression::Literal(Identifier(SymbolIdentifier, "column1".to_string())),
-                            Expression::Literal(Keyword(As)),
-                            Expression::Literal(Identifier(DoubleQuote, "column_one".to_string())),
+                            Expression::Binary {
+                                l: Box::new(Expression::Literal(Identifier(SymbolIdentifier, "column1".to_string()))),
+                                r: Box::new(Expression::Literal(Identifier(DoubleQuote, "column_one".to_string()))),
+                                op: Keyword(As)
+                            }
                         ],
                         from: Some("table_name".to_string()),
-                        where_cond: None,
+                        where_cond: None
                     }
-                ],
+                ]
             }
         );
 
@@ -827,15 +828,21 @@ mod test {
                 statements: vec![
                     Statement::SelectStatement {
                         item: vec![
-                            Expression::Literal(Identifier(SymbolIdentifier, "column1".to_string())),
-                            Expression::Literal(Keyword(As)),
-                            Expression::Literal(Identifier(DoubleQuote, "column_one".to_string())),
-                            Expression::Literal(Identifier(SymbolIdentifier, "column2".to_string())),
-                            Expression::Literal(Keyword(As)),
-                            Expression::Literal(Identifier(DoubleQuote, "column_two".to_string())),
-                            Expression::Literal(Identifier(SymbolIdentifier, "column3".to_string())),
-                            Expression::Literal(Keyword(As)),
-                            Expression::Literal(Identifier(DoubleQuote, "column_three".to_string())),
+                            Expression::Binary {
+                                l: Box::new(Expression::Literal(Identifier(SymbolIdentifier, "column1".to_string()))),
+                                r: Box::new(Expression::Literal(Identifier(DoubleQuote, "column_one".to_string()))),
+                                op: Keyword(As)
+                            },
+                            Expression::Binary {
+                                l: Box::new(Expression::Literal(Identifier(SymbolIdentifier, "column2".to_string()))),
+                                r: Box::new(Expression::Literal(Identifier(DoubleQuote, "column_two".to_string()))),
+                                op: Keyword(As),
+                            },
+                            Expression::Binary {
+                                l: Box::new(Expression::Literal(Identifier(SymbolIdentifier, "column3".to_string()))),
+                                r: Box::new(Expression::Literal(Identifier(DoubleQuote, "column_three".to_string()))),
+                                op: Keyword(As),
+                            }
                         ],
                         from: Some("table_name".to_string()),
                         where_cond: None,
